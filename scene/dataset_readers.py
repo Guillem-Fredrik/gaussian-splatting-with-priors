@@ -129,7 +129,7 @@ def storePly(path, xyz, rgb):
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
 
-def readColmapSceneInfo(path, images, eval, llffhold=8):
+def readColmapSceneInfo(path, images, eval, num_train_images=3, llffhold=8):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -151,6 +151,13 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
     else:
         train_cam_infos = cam_infos
         test_cam_infos = []
+
+    # Evenly subsample to the desired number of training samples
+    if num_train_images < len(train_cam_infos) - 1:
+        idx_sub = np.linspace(0, len(train_cam_infos) - 1, num_train_images)
+    else:
+        idx_sub = range(len(train_cam_infos))
+    train_cam_infos = [train_cam_infos[round(i)] for i in idx_sub]
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 
@@ -176,7 +183,7 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
                            ply_path=ply_path)
     return scene_info
 
-def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png"):
+def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png", num_images=None):
     cam_infos = []
 
     with open(os.path.join(path, transformsfile)) as json_file:
@@ -215,12 +222,20 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 
             cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
                             image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))
-            
+    
+    if num_images is not None:
+        # Evenly subsample to the desired number of training samples
+        if num_images < len(cam_infos) - 1:
+            idx_sub = np.linspace(0, len(cam_infos) - 1, num_images)
+        else:
+            idx_sub = range(len(cam_infos))
+        cam_infos = [cam_infos[round(i)] for i in idx_sub]
+
     return cam_infos
 
-def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
+def readNerfSyntheticInfo(path, white_background, eval, num_train_images=3, extension=".png"):
     print("Reading Training Transforms")
-    train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension)
+    train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension, num_images=num_train_images)
     print("Reading Test Transforms")
     test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", white_background, extension)
     
