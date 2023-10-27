@@ -188,11 +188,18 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 
     with open(os.path.join(path, transformsfile)) as json_file:
         contents = json.load(json_file)
-        fovx = contents["camera_angle_x"]
-
+        try:
+            fovx = contents["camera_angle_x"]
+        except KeyError:
+            fovx = focal2fov(contents["fl_x"], contents["w"])
+            
         frames = contents["frames"]
         for idx, frame in enumerate(frames):
-            cam_name = os.path.join(path, frame["file_path"] + extension)
+            
+            local_image_path = frame["file_path"] + extension
+            if local_image_path[0]=='/':
+                local_image_path = "."+local_image_path
+            cam_name = os.path.join(path, local_image_path)
 
             # NeRF 'transform_matrix' is a camera-to-world transform
             c2w = np.array(frame["transform_matrix"])
@@ -203,7 +210,6 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             w2c = np.linalg.inv(c2w)
             R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
             T = w2c[:3, 3]
-
             image_path = os.path.join(path, cam_name)
             image_name = Path(cam_name).stem
             image = Image.open(image_path)
@@ -269,7 +275,52 @@ def readNerfSyntheticInfo(path, white_background, eval, num_train_images=3, exte
                            ply_path=ply_path)
     return scene_info
 
+
+def readLLFFSceneInfo(path, white_background, eval, num_train_images=3, llffhold=8, extension=""):
+    cam_infos_unsorted = readCamerasFromTransforms(path, "transforms.json", white_background, extension, num_images=num_train_images)
+    cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
+
+    if eval:
+        train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
+        test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
+    else:
+        train_cam_infos = cam_infos
+        test_cam_infos = []
+
+    # Evenly subsample to the desired number of training samples
+    if num_train_images < len(train_cam_infos) - 1:
+        idx_sub = np.linspace(0, len(train_cam_infos) - 1, num_train_images)
+    else:
+        idx_sub = range(len(train_cam_infos))
+    train_cam_infos = [train_cam_infos[round(i)] for i in idx_sub]
+
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+
+    ply_path = os.path.join(path, "sparse/0/points3D.ply")
+    bin_path = os.path.join(path, "sparse/0/points3D.bin")
+    txt_path = os.path.join(path, "sparse/0/points3D.txt")
+    if not os.path.exists(ply_path):
+        print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
+        try:
+            xyz, rgb, _ = read_points3D_binary(bin_path)
+        except:
+            xyz, rgb, _ = read_points3D_text(txt_path)
+        storePly(ply_path, xyz, rgb)
+    try:
+        pcd = fetchPly(ply_path)
+    except:
+        pcd = None
+
+    scene_info = SceneInfo(point_cloud=pcd,
+                           train_cameras=train_cam_infos,
+                           test_cameras=test_cam_infos,
+                           nerf_normalization=nerf_normalization,
+                           ply_path=ply_path)
+    return scene_info
+
+
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
-    "Blender" : readNerfSyntheticInfo
+    "Blender" : readNerfSyntheticInfo,
+    "LLFF": readLLFFSceneInfo
 }
