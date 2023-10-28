@@ -55,6 +55,7 @@ class ModelParams(ParamGroup):
         self.data_device = "cuda"
         self.eval = False
         self.num_train_images = 3
+        self.camera_radius_scale = 0.33 # `scale` parameter in DiffusioNerf
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -87,6 +88,15 @@ class OptimizationParams(ParamGroup):
         self.densify_from_iter = 500
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0002
+        # Patch regularisation
+        self.patch_regulariser_path = ""
+        self.initial_diffusion_time = 0.1
+        self.patch_reg_start_step = 500
+        self.patch_reg_finish_step = 2500
+        self.patch_weight_start = 1.
+        self.patch_weight_finish = 1.
+        self.patch_sample_downscale_factor = 4
+        self.normalise_diffusion_losses = False
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

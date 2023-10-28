@@ -20,8 +20,15 @@ from utils.general_utils import safe_state
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
+from utils.graphics_utils import fov2focal
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+from pathlib import Path
+import numpy as np
+from learned_regularisation.patch_pose_generator import PatchPoseGenerator
+from learned_regularisation.patch_regulariser import load_patch_diffusion_model, \
+    PatchRegulariser, LLFF_DEFAULT_PSEUDO_INTRINSICS
+from learned_regularisation.utils import Intrinsics
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -43,6 +50,41 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end = torch.cuda.Event(enable_timing = True)
+
+    
+    if opt.patch_regulariser_path:
+        device = torch.device("cuda")
+        patch_diffusion_model = load_patch_diffusion_model(Path(opt.patch_regulariser_path))
+        pose_generator = PatchPoseGenerator(cameras=scene.getTrainCameras(),
+                                            spatial_perturbation_magnitude=0.2,
+                                            angular_perturbation_magnitude_rads=0.2 * np.pi,
+                                            no_perturb_prob=0.,
+                                            # frustum_checker=frustum_checker if opt.frustum_check_patches else None
+                        )
+        # pseudo_intrinsics = LLFF_DEFAULT_PSEUDO_INTRINSICS
+        camera = scene.getTrainCameras()[0]
+        W = camera.image_width
+        H = camera.image_height
+        intrinsics = Intrinsics(
+            fov2focal(camera.FoVx, W),
+            fov2focal(camera.FoVy, H),
+            W / 2,
+            H / 2,
+            W,
+            H
+        )
+        
+        print('Using patch intrinsics', intrinsics)
+        patch_regulariser = PatchRegulariser(pose_generator=pose_generator,
+                                                patch_diffusion_model=patch_diffusion_model,
+                                                full_image_intrinsics=intrinsics,
+                                                device=device,
+                                                planar_depths=True,
+                                                frustum_regulariser=None, # frustum_regulariser=frustum_regulariser if opt.frustum_regularise_patches else None,
+                                                sample_downscale_factor=opt.patch_sample_downscale_factor,
+                                                uniform_in_depth_space=opt.normalise_diffusion_losses,
+                                                background=background,
+                                                pipe=pipe)
 
     viewpoint_stack = None
     ema_loss_for_log = 0.0
@@ -82,11 +124,61 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             pipe.debug = True
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+        # print("image", image.shape, image) # DEBUG(guillem)
+        # print("viewspace_point_tensor", viewspace_point_tensor.shape, viewspace_point_tensor) # DEBUG(guillem)
 
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+
+        # Regularisation
+        if opt.patch_regulariser_path:
+            # t schedule
+            initial_diffusion_time = opt.initial_diffusion_time
+            patch_reg_start_step = opt.patch_reg_start_step
+            patch_reg_finish_step = opt.patch_reg_finish_step
+            weight_start = opt.patch_weight_start
+            weight_finish = opt.patch_weight_finish
+
+            lambda_t = (iteration - patch_reg_start_step) / (patch_reg_finish_step - patch_reg_start_step)
+            lambda_t = np.clip(lambda_t, 0., 1.)
+            weight = weight_start + (weight_finish - weight_start) * lambda_t
+
+            if iteration > patch_reg_start_step:
+                if iteration > patch_reg_finish_step:
+                    time = 0.
+                elif iteration > patch_reg_start_step:
+                    time = initial_diffusion_time * (1. - lambda_t)
+                else:
+                    raise RuntimeError('Internal error')
+                # p_sample_patch = 0.25
+                # if random.random() >= p_sample_patch:
+                patch_outputs = patch_regulariser.get_diffusion_loss_with_rendered_patch(gaussians=gaussians,
+                                                                                                  time=time)
+                # else:
+                #     patch_outputs = patch_regulariser.get_diffusion_loss_with_sampled_patch(
+                #         gaussians=gaussians, time=time, image=data['images_full'][0], image_intrinsics=data['intrinsics'],
+                #         pose=data['pose_c2w'][0]
+                #     )
+                loss += weight * patch_outputs.loss
+
+                # # Geometric reg
+                # if opt.apply_geom_reg_to_patches:
+                #     loss += spread_loss_weight * patch_outputs.render_outputs['loss_dist']
+
+                # # Frustum reg
+                # if patch_regulariser.frustum_regulariser is not None:
+                #     xyzs_flat = patch_outputs.render_outputs['xyzs'].reshape(-1, 3)
+                #     weights_flat = patch_outputs.render_outputs['weights'].reshape(-1)
+
+                #     patch_frustum_reg_weight = get_frustum_reg_str()
+                #     patch_frustum_loss = patch_frustum_reg_weight * patch_regulariser.frustum_regulariser(
+                #         xyzs=xyzs_flat, weights=weights_flat, frustum_count_thresh=1,
+                #     )
+                #     print('Patch frustum loss', patch_frustum_loss)
+                #     loss += patch_frustum_loss
+
         loss.backward()
 
         iter_end.record()
