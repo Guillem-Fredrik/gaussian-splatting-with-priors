@@ -73,10 +73,8 @@ def make_random_patch_intrinsics(patch_size: int, full_image_intrinsics: Intrins
     :return: Intrinsics for patch as described above
     """
     intrinsics_downscaled = Intrinsics(
-        fx=full_image_intrinsics.fx * downscale_factor,
-        fy=full_image_intrinsics.fy * downscale_factor,
-        # fx=full_image_intrinsics.fx // downscale_factor,
-        # fy=full_image_intrinsics.fy // downscale_factor,
+        fx=full_image_intrinsics.fx // downscale_factor,
+        fy=full_image_intrinsics.fy // downscale_factor,
         cx=full_image_intrinsics.cx // downscale_factor,
         cy=full_image_intrinsics.cy // downscale_factor,
         width=full_image_intrinsics.width // downscale_factor,
@@ -84,7 +82,10 @@ def make_random_patch_intrinsics(patch_size: int, full_image_intrinsics: Intrins
     )
 
     # Allow our sampled patch to extend past the edges of the img, as long as it overlaps at least marginally with it
-    extra_margin = patch_size/2.
+    # extra_margin = patch_size/2.
+    # NOTE(guillem): I don't understand the above comment and code. If the patch extends past the edges, then the
+    # assertions in `sample_patch_from_img` below fail.
+    extra_margin = 0.0
 
     delta_x = intrinsics_downscaled.width - patch_size
     delta_y = intrinsics_downscaled.height - patch_size
@@ -230,31 +231,28 @@ class PatchRegulariser:
                                        render_outputs=render_outputs)
         
         # DEBUG(guillem)
-        if random.random() > 0.98:
-            xn = random.random()
-            torchvision.utils.save_image((patch_outputs.images["rendered_rgb"].clamp(0, 1)).permute(0, 3, 1, 2), 'debug/{}-a-rgb.png'.format(xn))
-            torchvision.utils.save_image((torch.repeat_interleave(patch_outputs.images["rendered_depth"], repeats=3, dim=-1).clamp(0, 1)).permute(0, 3, 1, 2), 'debug/{}-a-d.png'.format(xn))
-            torchvision.utils.save_image((torch.repeat_interleave(patch_outputs.images["pred_disp_noise"].unsqueeze(-1), repeats=3, dim=-1).clamp(0, 1)).permute(0, 3, 1, 2), 'debug/{}-n-d.png'.format(xn))
-            torchvision.utils.save_image((patch_outputs.images["pred_rgb_noise"].clamp(0, 1)).permute(0, 3, 1, 2), 'debug/{}-n-rgb.png'.format(xn))
-
-            # for i in range(8):
-            #     depth_patch, rgb_patch, render_outputs = self._render_random_patch(gaussians)
-            #     torchvision.utils.save_image((rgb_patch.clamp(0, 1)).permute(0, 3, 1, 2), 'debug/{}-x-{}.png'.format(xn, i))
+        # if random.random() > 0.98:
+        #     xn = random.random()
+        #     torchvision.utils.save_image((patch_outputs.images["rendered_rgb"].clamp(0, 1)).permute(0, 3, 1, 2), 'debug/{}-a-rgb.png'.format(xn))
+        #     torchvision.utils.save_image((torch.repeat_interleave(patch_outputs.images["rendered_depth"], repeats=3, dim=-1).clamp(0, 1)).permute(0, 3, 1, 2), 'debug/{}-a-d.png'.format(xn))
+        #     torchvision.utils.save_image((torch.repeat_interleave(patch_outputs.images["pred_disp_noise"].unsqueeze(-1), repeats=3, dim=-1).clamp(0, 1)).permute(0, 3, 1, 2), 'debug/{}-n-d.png'.format(xn))
+        #     torchvision.utils.save_image((patch_outputs.images["pred_rgb_noise"].clamp(0, 1)).permute(0, 3, 1, 2), 'debug/{}-n-rgb.png'.format(xn))
+        
         return patch_outputs
 
     def get_diffusion_loss_with_sampled_patch(self, gaussians: GaussianModel, time, image, image_intrinsics,
-                                              pose) -> PatchOutputs:
+                                              camera) -> PatchOutputs:
         # As described in the paper, we sometimes sample a patch from the image rather than rendering it using the NeRF.
         # This function does that (though we still have to render the depth channel using the NeRF).
         while True:
             try:
                 depth_patch, rgb_patch, render_outputs = self._sample_patch(
-                    image=image, image_intrinsics=image_intrinsics, pose=pose, gaussians=gaussians
+                    image=image, image_intrinsics=image_intrinsics, camera=camera, gaussians=gaussians
                 )
                 return self.get_loss_for_patch(depth_patch=depth_patch, rgb_patch=rgb_patch, time=time,
                                                update_depth_only=True, render_outputs=render_outputs)
             except AssertionError as e:
-                print('Exception:', str(e))
+                print('Exception (assertion failed):', str(e))
 
     def get_loss_for_patch(self, depth_patch, rgb_patch, time, render_outputs,
                            update_depth_only: bool = False) -> PatchOutputs:
@@ -349,14 +347,15 @@ class PatchRegulariser:
         # print('Pose', camera)
         intrinsics = self._get_random_patch_intrinsics()
         # print('Patch intrinsics', intrinsics)
-        pred_depth, pred_rgb, render_outputs = self._render_patch_with_intrinsics(intrinsics=intrinsics,
+        pred_depth, pred_rgb, _, render_outputs = self._render_patch_with_intrinsics(intrinsics=intrinsics,
                                                                                      camera=camera, gaussians=gaussians)
         return pred_depth, pred_rgb, render_outputs
 
     def _render_patch_with_intrinsics(self, intrinsics, camera, gaussians):
-        viewpoint_cam = apply_intrinsics_to_camera(intrinsics, camera) 
+        viewpoint_cam = apply_intrinsics_to_camera(intrinsics, camera, self._full_image_intrinsics) 
         render_pkg_rgb = render(viewpoint_cam, gaussians, self.pipe, self.background)
         render_pkg_depth = render(viewpoint_cam, gaussians, self.pipe, self.background, render_depth=True)
+        patch_rays = get_the_rays(intrinsics, H=self._patch_size, W=self._patch_size, device="cuda")
 
         outputs = {
             'depth': render_pkg_depth["render"][0,:],
@@ -364,9 +363,7 @@ class PatchRegulariser:
         }
 
         if self._planar_depths:
-            # print("WARNING: Planar depths not implemented (using non-planar instead)") # TODO(guillem)
-            depth = outputs['depth']
-            #depth = outputs['depth'] * patch_rays['rays_d_cam_z']
+            depth = outputs['depth'] * patch_rays[..., -1]
         else:
             depth = outputs['depth']
 
@@ -374,17 +371,22 @@ class PatchRegulariser:
         pred_depth = depth.reshape(B, intrinsics.height, intrinsics.width, 1)
         pred_rgb = outputs['image'].reshape(B, intrinsics.height, intrinsics.width, 3)
 
-        return pred_depth, pred_rgb, outputs
+        return pred_depth, pred_rgb, patch_rays, outputs
 
     def _sample_patch(self, image, image_intrinsics, camera, gaussians):
         patch_intrinsics = self._get_random_patch_intrinsics()
-        rendered_depth, rendered_rgb, render_outputs = self._render_patch_with_intrinsics(
+        rendered_depth, rendered_rgb, patch_rays, render_outputs = self._render_patch_with_intrinsics(
             intrinsics=patch_intrinsics, camera=camera, gaussians=gaussians
         )
-        raise NotImplementedError()
         with torch.no_grad():
-            gt_rgb = sample_patch_from_img(rays_d=patch_rays['rays_d_cam'], img=image,
+            gt_rgb = sample_patch_from_img(rays_d=patch_rays, img=image,
                                            img_intrinsics=image_intrinsics, patch_size=self._patch_size)
+            # DEBUG(guillem)
+            # xn = random.random()
+            # torchvision.utils.save_image((rendered_rgb.clamp(0, 1)).permute(0, 3, 1, 2), 'debug/s-{}-a-rgb.png'.format(xn))
+            # torchvision.utils.save_image((gt_rgb.clamp(0, 1)).permute(0, 3, 1, 2), 'debug/s-{}-b-rgb.png'.format(xn))
+            # torchvision.utils.save_image(image, 'debug/s-{}-c-rgb.png'.format(xn))
+            
 
         return rendered_depth, gt_rgb, render_outputs
 
@@ -425,20 +427,46 @@ def normalise_together(imgs):
     return [img/max_val for img in imgs]
 
 
+@torch.cuda.amp.autocast(enabled=False)
+def get_the_rays(patch_intrinsics, H, W, device):
+    fx, fy, cx, cy = patch_intrinsics.fx, patch_intrinsics.fy, patch_intrinsics.cx, patch_intrinsics.cy
+    B = 1
+
+    i, j = torch.meshgrid(torch.linspace(0, W - 1, W, device=device), torch.linspace(0, H - 1, H, device=device), indexing='ij')
+    i = i.t().reshape([1, H*W]).expand([B, H*W]) + 0.5
+    j = j.t().reshape([1, H*W]).expand([B, H*W]) + 0.5
+
+    zs = torch.ones_like(i)
+    xs = (i - cx) / fx * zs
+    ys = (j - cy) / fy * zs
+    directions = torch.stack((xs, ys, zs), dim=-1)
+
+    i = directions[..., 0] / directions[..., 2]
+    j = directions[..., 1] / directions[..., 2]
+
+    return (directions / torch.norm(directions, dim=-1, keepdim=True)).reshape((H, W, 3))
+
+
 def sample_patch_from_img(rays_d, img, img_intrinsics, patch_size: int):
     """
     Sample a patch from an image.
-    :param rays_d: rays_d as returned by the get_rays() function
+    :param patch_intrinsics: The camera intrinsics of the patch to retrieve
     :param img: Image to sample the patch from from
     :param img_intrinsics: Intrinsics for the image as a four-element sequence (fx, fy, cx, cy) in pixel coords.
     :param patch_size: Side length of the patch to make, in units of pixels
     """
-    fx, fy, cx, cy = img_intrinsics
-    h, w, c = img.shape
+    img = img.permute(1,2,0)
 
-    b, num_rays, n_dim = rays_d.shape
-    assert n_dim == 3
-    assert b == 1
+    fx, fy, cx, cy = img_intrinsics.fx, img_intrinsics.fy, img_intrinsics.cx, img_intrinsics.cy
+    
+    H, W, C = img.shape
+
+    B = 1
+    
+    rays_d = rays_d.reshape((B, patch_size*patch_size, 3))
+
+    i = rays_d[..., 0] / rays_d[..., 2]
+    j = rays_d[..., 1] / rays_d[..., 2]
 
     # Go from ray directions in camera frame to pixel coordinates
     pixel_i = fx * rays_d[..., 0] / rays_d[..., 2] + cx + 0.5
@@ -447,12 +475,12 @@ def sample_patch_from_img(rays_d, img, img_intrinsics, patch_size: int):
     assert (pixel_i >= 0.).all()
     assert (pixel_j >= 0.).all()
 
-    assert (pixel_i <= w).all()
-    assert (pixel_j <= h).all()
+    assert (pixel_i <= W).all()
+    assert (pixel_j <= H).all()
 
     # Normalise - grid_sample wants query locations in [-1, 1].
-    pixel_i = pixel_i / w
-    pixel_j = pixel_j / h
+    pixel_i = pixel_i / W
+    pixel_j = pixel_j / H
     pixel_i = 2. * pixel_i - 1.
     pixel_j = 2. * pixel_j - 1.
 

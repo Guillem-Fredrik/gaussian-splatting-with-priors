@@ -11,3 +11,6 @@ screenshots
 *.bin
 *.ini
 *.ply
+data
+models
+debug

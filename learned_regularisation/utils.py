@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from scipy.spatial.transform import Slerp, Rotation
 from scene.cameras import Camera
-from utils.graphics_utils import focal2fov
+from utils.graphics_utils import focal2fov, getWorld2View2, getProjectionMatrix
 
 @dataclass
 class Intrinsics:
@@ -122,19 +122,64 @@ def get_typical_deltas_between_poses(poses):
 
 
 
-def apply_intrinsics_to_camera(intrinsics, camera):
+def apply_intrinsics_to_camera(intrinsics, camera, old_intrinsics):
     # Apply intrinsics to camera
     # The result will be a camera that with prescribed FOV (`fx`, `fy`) and whose center is (`cx`, `cy`)
-    fov_x = focal2fov(intrinsics.fx, camera.image_width)
-    fov_y = focal2fov(intrinsics.fy, camera.image_height)
-    new_camera = Camera(camera.colmap_id, camera.R, camera.T, fov_x, fov_y, camera.original_image, None,
+    fov_x = focal2fov(intrinsics.fx, intrinsics.width)
+    fov_y = focal2fov(intrinsics.fy, intrinsics.height)
+
+    # The conversion between the old screen space and the new one is given by
+    # (old_x, old_y, 1) = pixel_conversion @ (x, y, 1)
+    # for 0<=x,y<1, where:
+    pixel_conversion = np.array([
+        1.0/camera.image_width, 0.0,                     0.0, 0.0,
+        0.0,                    1.0/camera.image_height, 0.0, 0.0,
+        0.0,                    0.0,                     1.0, 0.0,
+        0.0,                    0.0,                     0.0, 1.0,
+    ]).reshape(4, 4) @ np.array([
+        old_intrinsics.fx, 0.0,               0.0, old_intrinsics.cx,
+        0.0,               old_intrinsics.fy, 0.0, old_intrinsics.cy,
+        0.0,               0.0,               1.0,  0.0,
+        0.0,               0.0,               0.0,  1.0,
+    ]).reshape(4, 4) @ np.array([
+        1.0/intrinsics.fx, 0.0,               0.0, -intrinsics.cx / intrinsics.fx,
+        0.0,               1.0/intrinsics.fy, 0.0, -intrinsics.cy / intrinsics.fy,
+        0.0,               0.0,               1.0,  0.0,
+        0.0,               0.0,               0.0,  1.0,
+    ]).reshape(4, 4) @ np.array([
+        intrinsics.width, 0.0,               0.0, 0.0,
+        0.0,              intrinsics.height, 0.0, 0.0,
+        0.0,              0.0,               1.0, 0.0,
+        0.0,              0.0,               0.0, 1.0,
+    ]).reshape(4, 4)
+    
+    # Screen coordinates range from -1 to 1 instead of 0 to 1, so we must correct for that
+    M = np.array([
+        2.0, 0.0, 0.0, -1.0,
+        0.0, 2.0, 0.0, -1.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ]).reshape(4, 4)
+    pixel_conversion = M @ pixel_conversion @ np.linalg.inv(M)
+
+    # For a point (x,y,z) in world space, we therefore want
+    # camera.full_proj_transform @ (x,y,z) == pixel_conversion @ new_camera.full_proj_transform @ (x,y,z)
+    # So
+    # X := new_camera.full_proj_transform == pixel_conversion.inv() @ camera.full_proj_transform
+    X = np.linalg.inv(pixel_conversion) @ camera.full_proj_transform.transpose(0,1).cpu().numpy()
+
+    # As X = new_proj @ c2w, the camera2world matrix will be
+    c2w = np.linalg.inv(getProjectionMatrix(znear=0.01, zfar=100.0, fovX=fov_x, fovY=fov_y)) @ X
+
+    # So the new R and T will be
+    R = c2w[:3, :3].transpose()
+    T = c2w[:3, 3]
+
+    new_camera = Camera(camera.colmap_id, R, T, fov_x, fov_y, camera.original_image, None,
                  camera.image_name, camera.uid,
-                #  trans=np.array([intrinsics.cx, intrinsics.cy, 0.0]),
                  trans=np.array([0.0, 0.0, 0.0]),
                  scale=1.0, data_device = "cuda"
                  )
     new_camera.image_width = intrinsics.width
     new_camera.image_height = intrinsics.height
-    # print("fov_orig", camera.FoVx, camera.FoVy)
-    # print("fov_modf", new_camera.FoVx, new_camera.FoVy)
     return new_camera

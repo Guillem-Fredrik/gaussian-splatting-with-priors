@@ -11,6 +11,7 @@
 
 import os
 import torch
+import random
 from random import randint
 from utils.loss_utils import l1_loss, ssim
 from gaussian_renderer import render, network_gui
@@ -152,15 +153,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     time = initial_diffusion_time * (1. - lambda_t)
                 else:
                     raise RuntimeError('Internal error')
-                # p_sample_patch = 0.25
-                # if random.random() >= p_sample_patch:
-                patch_outputs = patch_regulariser.get_diffusion_loss_with_rendered_patch(gaussians=gaussians,
+                p_sample_patch = 0.25
+                if random.random() >= p_sample_patch:
+                    patch_outputs = patch_regulariser.get_diffusion_loss_with_rendered_patch(gaussians=gaussians,
                                                                                                   time=time)
-                # else:
-                #     patch_outputs = patch_regulariser.get_diffusion_loss_with_sampled_patch(
-                #         gaussians=gaussians, time=time, image=data['images_full'][0], image_intrinsics=data['intrinsics'],
-                #         pose=data['pose_c2w'][0]
-                #     )
+                else:
+                    patch_outputs = patch_regulariser.get_diffusion_loss_with_sampled_patch(
+                        gaussians=gaussians, time=time, image=gt_image, image_intrinsics=intrinsics,
+                        camera=viewpoint_cam
+                    )
                 loss += weight * patch_outputs.loss
 
                 # # Geometric reg
