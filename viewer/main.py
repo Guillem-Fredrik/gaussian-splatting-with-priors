@@ -34,9 +34,11 @@ g_show_control_win = True
 g_show_help_win = True
 g_render_mode_tables = ["Gaussian Ball", "Billboard", "Depth", "SH:0", "SH:0~1", "SH:0~2", "SH:0~3 (default)"]
 g_render_mode = 6
-model_path = None
-cameras = []
+g_model_path = None
 g_chosen_camera = 0
+g_all_iterations = []
+g_chosen_iteration = None
+cameras = []
 current_keys = set()
 
 def impl_glfw_init():
@@ -104,33 +106,38 @@ def window_resize_callback(window, width, height):
     g_camera.update_resolution(height, width)
 
 def handle_keys(delta_t):
-    global model_path
+    global g_model_path
     if glfw.KEY_Q in current_keys:
         g_camera.process_roll_key(1)
     elif glfw.KEY_E in current_keys:
         g_camera.process_roll_key(-1)
-    elif glfw.KEY_R in current_keys and model_path is not None:
+    elif glfw.KEY_R in current_keys and g_model_path is not None:
         print("Updating scene")
         try:
-            update_model_path(model_path)
+            update_model_path(g_model_path)
         except plyfile.PlyElementParseError:
             pass
     g_camera.process_trans_keys(current_keys, delta_t)
 
-
 def update_model_path(path):
-    global model_path, cameras
-    model_path = path
-    ply_path = glob.glob(path+"/point_cloud/iteration_*/point_cloud.ply")[-1]
-    gaussians = util_gau.load_ply(ply_path)
+    global g_model_path, cameras, g_all_iterations
+    g_model_path = path
+    g_all_iterations = sorted(glob.glob(path+"/point_cloud/iteration_*"),key=lambda x:int(x.split("_")[-1]))
+    g_all_iterations = [Path(x).parts[-1] for x in g_all_iterations]
     cameras = json.load(open(path+"/cameras.json","r"))
+    return update_iteration(len(g_all_iterations)-1)
+
+def update_iteration(chosen_iteration):
+    global g_chosen_iteration, g_model_path, g_all_iterations
+    g_chosen_iteration = chosen_iteration
+    gaussians = util_gau.load_ply(g_model_path + "/point_cloud/" + g_all_iterations[g_chosen_iteration] + "/point_cloud.ply")
     update_gaussian_data(gaussians)
     return gaussians
 
 def main():
     global g_program, g_camera, g_scale_modifier, g_auto_sort, \
         g_show_control_win, g_show_help_win, \
-        g_render_mode, g_render_mode_tables, model_path, g_chosen_camera, cameras
+        g_render_mode, g_render_mode_tables, g_model_path, g_chosen_camera, cameras, g_all_iterations, g_chosen_iteration
         
     imgui.create_context()
     if args.hidpi:
@@ -181,8 +188,12 @@ def main():
     gl.glEnable(gl.GL_BLEND)
     gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
     
+    if args.path is not None and g_model_path is None:
+        print(str(args.path).replace("\\","/"))
+        gaussians = update_model_path(str(args.path))
+        g_camera.set_camera_view(cameras[g_chosen_camera])
+    
     last_time = time.time()
-    iter = 0
     while not glfw.window_should_close(window):
         
         glfw.poll_events()
@@ -230,13 +241,12 @@ def main():
                     if path:
                         print(path)
                         gaussians = update_model_path(path)
-                        
-                iter += 1
-                if iter==10000:
-                    if args.path is not None and model_path is None:
-                        print(str(args.path).replace("\\","/"))
-                        update_model_path(str(args.path))
-                        
+
+                # Iterations
+                if g_all_iterations:
+                    changed, g_chosen_iteration = imgui.combo("iteration", g_chosen_iteration, g_all_iterations)
+                    if changed:
+                        gaussians = update_iteration(g_chosen_iteration)
                 
                 # camera fov
                 changed, g_camera.fovy = imgui.slider_float(
