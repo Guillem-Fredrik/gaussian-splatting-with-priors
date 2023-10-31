@@ -11,6 +11,7 @@
 
 import os
 import torch
+import torchvision
 import random
 from random import randint
 from utils.loss_utils import l1_loss, ssim
@@ -26,7 +27,7 @@ from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from pathlib import Path
 import numpy as np
-from learned_regularisation.patch_pose_generator import PatchPoseGenerator
+from learned_regularisation.patch_pose_generator import PatchPoseGenerator, FrustumChecker, FrustumRegulariser
 from learned_regularisation.patch_regulariser import load_patch_diffusion_model, \
     PatchRegulariser, LLFF_DEFAULT_PSEUDO_INTRINSICS
 from learned_regularisation.utils import Intrinsics
@@ -55,15 +56,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     
     if opt.patch_regulariser_path:
         device = torch.device("cuda")
-        patch_diffusion_model = load_patch_diffusion_model(Path(opt.patch_regulariser_path))
-        pose_generator = PatchPoseGenerator(cameras=scene.getTrainCameras(),
-                                            spatial_perturbation_magnitude=0.2,
-                                            angular_perturbation_magnitude_rads=0.2 * np.pi,
-                                            no_perturb_prob=0.,
-                                            # frustum_checker=frustum_checker if opt.frustum_check_patches else None
-                        )
-        # pseudo_intrinsics = LLFF_DEFAULT_PSEUDO_INTRINSICS
+
         camera = scene.getTrainCameras()[0]
+        # pseudo_intrinsics = LLFF_DEFAULT_PSEUDO_INTRINSICS
         W = camera.image_width
         H = camera.image_height
         intrinsics = Intrinsics(
@@ -74,6 +69,22 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             W,
             H
         )
+
+        frustum_checker = FrustumChecker(fov_x_rads=camera.FoVx, fov_y_rads=camera.FoVy)
+        frustum_regulariser = FrustumRegulariser(
+            intrinsics=intrinsics,
+            reg_strength=1e-5,  # NB in the trainer this gets multiplied by the strength params passed in via the args
+            min_near=opt.min_near,
+            cameras=scene.getTrainCameras(),
+        )
+
+        patch_diffusion_model = load_patch_diffusion_model(Path(opt.patch_regulariser_path))
+        pose_generator = PatchPoseGenerator(cameras=scene.getTrainCameras(),
+                                            spatial_perturbation_magnitude=0.2,
+                                            angular_perturbation_magnitude_rads=0.2 * np.pi,
+                                            no_perturb_prob=0.,
+                                            frustum_checker=frustum_checker if opt.frustum_check_patches else None
+                        )
         
         print('Using patch intrinsics', intrinsics)
         patch_regulariser = PatchRegulariser(pose_generator=pose_generator,
@@ -81,7 +92,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                                                 full_image_intrinsics=intrinsics,
                                                 device=device,
                                                 planar_depths=True,
-                                                frustum_regulariser=None, # frustum_regulariser=frustum_regulariser if opt.frustum_regularise_patches else None,
+                                                frustum_regulariser=None,
+                                                # frustum_regulariser=frustum_regulariser if opt.frustum_regularise_patches else None,
                                                 sample_downscale_factor=opt.patch_sample_downscale_factor,
                                                 uniform_in_depth_space=opt.normalise_diffusion_losses,
                                                 background=background,
@@ -125,13 +137,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             pipe.debug = True
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-        # print("image", image.shape, image) # DEBUG(guillem)
-        # print("viewspace_point_tensor", viewspace_point_tensor.shape, viewspace_point_tensor) # DEBUG(guillem)
 
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+
+        # if iteration % 100 == 0:
+        #     render_depth = render(viewpoint_cam, gaussians, pipe, background, render_depth=True)
+        #     xn = random.random()
+        #     torchvision.utils.save_image(render_depth["render"], 'debug/depth-{}.png'.format(xn))
 
         # Regularisation
         if opt.patch_regulariser_path:
@@ -168,17 +183,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 # if opt.apply_geom_reg_to_patches:
                 #     loss += spread_loss_weight * patch_outputs.render_outputs['loss_dist']
 
-                # # Frustum reg
-                # if patch_regulariser.frustum_regulariser is not None:
-                #     xyzs_flat = patch_outputs.render_outputs['xyzs'].reshape(-1, 3)
-                #     weights_flat = patch_outputs.render_outputs['weights'].reshape(-1)
+                # Frustum reg        
+                if patch_regulariser.frustum_regulariser is not None:
+                    frustum_reg_weight = opt.frustum_reg_initial_weight if iteration < 100 else opt.frustum_reg_final_weight
 
-                #     patch_frustum_reg_weight = get_frustum_reg_str()
-                #     patch_frustum_loss = patch_frustum_reg_weight * patch_regulariser.frustum_regulariser(
-                #         xyzs=xyzs_flat, weights=weights_flat, frustum_count_thresh=1,
-                #     )
-                #     print('Patch frustum loss', patch_frustum_loss)
-                #     loss += patch_frustum_loss
+                    xyzs_flat = patch_outputs.render_outputs['xyzs'].reshape(-1, 3)
+                    weights_flat = patch_outputs.render_outputs['weights'].reshape(-1)
+
+                    patch_frustum_reg_weight = frustum_reg_weight
+                    patch_frustum_loss = patch_frustum_reg_weight * patch_regulariser.frustum_regulariser(
+                        xyzs=xyzs_flat, weights=weights_flat, frustum_count_thresh=1,
+                    )
+                    print('Patch frustum loss', patch_frustum_loss)
+                    loss += patch_frustum_loss
 
         loss.backward()
 

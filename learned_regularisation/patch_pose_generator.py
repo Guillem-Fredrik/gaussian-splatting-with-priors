@@ -34,7 +34,7 @@ class FrustumChecker:
 
 
 class FrustumRegulariser:
-    def __init__(self, poses: List[torch.Tensor], intrinsics: Intrinsics, reg_strength: float,
+    def __init__(self, cameras: List[Camera], intrinsics: Intrinsics, reg_strength: float,
                  min_near: float = 0.):
         """
         Frustum regulariser as described in the DiffusioNeRF paper. Exists to penalise placement of material
@@ -46,7 +46,7 @@ class FrustumRegulariser:
         :param min_near: Points will be only considered to lie in a frustum if their depth is at least min_near. This should be the same
         value of min_near which is used in rendering (i.e. whatever opt.min_near is).
         """
-        self.transforms_w2c = [torch.linalg.inv(pose) for pose in poses]
+        self.transforms_w2c = [camera.world_view_transform for camera in cameras]
         self.intrinsics = intrinsics
         self.reg_strength = reg_strength
         self.min_near = min_near
@@ -74,7 +74,7 @@ class FrustumRegulariser:
             frustum_counts += self.is_in_frustum(tf, xyzs)
         return frustum_counts
 
-    def __call__(self, xyzs: torch.Tensor, weights: torch.Tensor, frustum_count_thresh: int = 2,
+    def __call__(self, xyzs: torch.Tensor, weights: torch.Tensor, frustum_count_thresh: int = 1,
                  debug_vis_name: Optional[str] = None) -> torch.Tensor:
         """
         Compute the frustum regularisation loss for some points.
@@ -179,3 +179,8 @@ def perturb_camera(camera, spatial_mag: float, angular_mag: float):
         )
 
     return new_camera
+
+def unpack_4x4_transform(transform_mat):
+    # Unpack transform into rotation & translation parts; obviously not valid if your matrix is more exotic
+    # than an affine transform
+    return transform_mat[:3, :3], transform_mat[:3, 3]
