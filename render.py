@@ -37,6 +37,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         gt = view.original_image[0:3, :, :]
         torchvision.utils.save_image(rendering["render"], os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(rendering["render_depth"]/100, os.path.join(render_path, '{0:05d}'.format(idx) + "_depth.png"))
+        torchvision.utils.save_image(rendering["render_opacity"], os.path.join(render_path, '{0:05d}'.format(idx) + "_opacity.png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool):

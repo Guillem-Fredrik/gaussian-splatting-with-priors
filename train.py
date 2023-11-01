@@ -131,8 +131,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
-
+        loss_photo = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        loss_diffusion = 0
         # Regularisation
         if opt.patch_regulariser_path:
             # t schedule
@@ -162,7 +162,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                         gaussians=gaussians, time=time, image=gt_image, image_intrinsics=intrinsics,
                         camera=viewpoint_cam
                     )
-                loss += weight * patch_outputs.loss
+                loss_diffusion = weight * patch_outputs.loss
 
                 # # Geometric reg
                 # if opt.apply_geom_reg_to_patches:
@@ -180,6 +180,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                 #     print('Patch frustum loss', patch_frustum_loss)
                 #     loss += patch_frustum_loss
 
+        # fg regularisation
+        loss_fg = render_pkg["render_opacity"].mean() * opt.fg_reg_weight
+
+        loss = loss_photo+loss_diffusion+loss_fg
         loss.backward()
 
         iter_end.record()
@@ -188,7 +192,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
+                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "Loss_fg": f"{loss_fg:.{4}f}", "Loss_diffusion": f"{loss_diffusion:.{4}f}", "Loss_photo":f"{loss_photo:.{4}f}"})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -198,11 +202,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
-            if iteration%save_every == 0:
+            if save_every is not None and iteration%save_every == 0:
                 scene.save("current")
 
             # Densification
-            if iteration < opt.densify_until_iter:
+            if iteration < opt.densify_until_iter and gaussians._xyz.shape[0] < opt.max_gaussians:
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
@@ -210,6 +214,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
+                    
+                    print("Num gaussians", gaussians._xyz.shape[0])
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()

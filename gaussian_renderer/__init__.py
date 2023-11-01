@@ -33,6 +33,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
     tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
 
+    bg_color = torch.concat([bg_color, torch.tensor([1.0],device=bg_color.device)])
+
     raster_settings = GaussianRasterizationSettings(
         image_height=int(viewpoint_camera.image_height),
         image_width=int(viewpoint_camera.image_width),
@@ -78,6 +80,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
             depth = torch.norm(pc.get_xyz-viewpoint_camera.camera_center,dim=1)
             colors_precomp = torch.concat([colors_precomp,depth.reshape((-1,1))],dim=1)
+            colors_precomp = torch.concat([colors_precomp,torch.zeros_like(depth).reshape((-1,1))],dim=1)
         else:
             shs = pc.get_features
     else:
@@ -96,11 +99,13 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     
     render_rgb = rendered_image[:3]
     render_depth = rendered_image[3]
+    render_opacity = rendered_image[4]
 
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
     return {"render": render_rgb,
             "render_depth": render_depth,
+            "render_opacity": render_opacity,
             "viewspace_points": screenspace_points,
             "visibility_filter" : radii > 0,
             "radii": radii}
