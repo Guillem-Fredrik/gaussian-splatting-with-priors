@@ -22,11 +22,6 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     Background tensor (bg_color) must be on GPU!
     """
     
-    if render_depth:
-        override_color = torch.norm(pc.get_xyz-viewpoint_camera.camera_center,dim=1)
-        override_color = torch.broadcast_to(override_color.reshape((-1,1)),(-1,3))
-        override_color = override_color/20
-    
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
     screenspace_points = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
     try:
@@ -81,6 +76,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
             sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
             colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
+            depth = torch.norm(pc.get_xyz-viewpoint_camera.camera_center,dim=1)
+            colors_precomp = torch.concat([colors_precomp,depth.reshape((-1,1))],dim=1)
         else:
             shs = pc.get_features
     else:
@@ -96,10 +93,14 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         scales = scales,
         rotations = rotations,
         cov3D_precomp = cov3D_precomp)
+    
+    render_rgb = rendered_image[:3]
+    render_depth = rendered_image[3]
 
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
-    return {"render": rendered_image,
+    return {"render": render_rgb,
+            "render_depth": render_depth,
             "viewspace_points": screenspace_points,
             "visibility_filter" : radii > 0,
             "radii": radii}

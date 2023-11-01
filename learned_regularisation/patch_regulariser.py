@@ -353,13 +353,12 @@ class PatchRegulariser:
 
     def _render_patch_with_intrinsics(self, intrinsics, camera, gaussians):
         viewpoint_cam = apply_intrinsics_to_camera(intrinsics, camera, self._full_image_intrinsics) 
-        render_pkg_rgb = render(viewpoint_cam, gaussians, self.pipe, self.background)
-        render_pkg_depth = render(viewpoint_cam, gaussians, self.pipe, self.background, render_depth=True)
+        render_pkg = render(viewpoint_cam, gaussians, self.pipe, self.background)
         patch_rays = get_the_rays(intrinsics, H=self._patch_size, W=self._patch_size, device="cuda")
 
         outputs = {
-            'depth': render_pkg_depth["render"][0,:],
-            'image': render_pkg_rgb["render"].reshape(3, intrinsics.height, intrinsics.width).permute(1, 2, 0)  # (B, C, H, W) -> (B, H, W, C),
+            'depth': render_pkg["render_depth"][0,:],
+            'image': render_pkg["render"].reshape(3, intrinsics.height, intrinsics.width).permute(1, 2, 0)  # (B, C, H, W) -> (B, H, W, C),
         }
 
         if self._planar_depths:
