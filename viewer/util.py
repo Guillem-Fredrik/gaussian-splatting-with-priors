@@ -4,7 +4,9 @@ import OpenGL.GL.shaders as shaders
 import numpy as np
 import glm
 import ctypes
+from scipy.spatial.transform import Rotation
 import glfw
+import torch
 
 def rotation_matrix(axis, theta):
     """
@@ -160,7 +162,14 @@ class Camera:
         
         self.is_pose_dirty = True
     
+    def random_perturb(self, spatial_mag=0.2, angular_mag=0.2 * np.pi):
+        cam_centre_perturbation = spatial_mag * (2. * np.random.rand(3,) - 1.)
+        self.position += cam_centre_perturbation
         
+        rotation_perturbation = Rotation.random().as_rotvec() * (angular_mag / (2. * np.pi))
+        rotation_perturbation = Rotation.from_rotvec(rotation_perturbation).as_matrix()
+        self.target = self.position + rotation_perturbation @ np.asarray(self.target - self.position)
+        self.up = rotation_perturbation @ np.asarray(self.up)
     
     def update_resolution(self, height, width):
         self.h = height
@@ -175,6 +184,7 @@ class Camera:
         self.target = front + self.position
         self.fovy = focal2fov(camera["fy"],camera["height"])
         self.is_intrin_dirty = True
+    
 
 
 def load_shaders(vs, fs):

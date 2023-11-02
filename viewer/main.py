@@ -122,7 +122,7 @@ def handle_keys(delta_t):
 def update_model_path(path):
     global g_model_path, cameras, g_all_iterations
     g_model_path = path
-    g_all_iterations = sorted(glob.glob(path+"/point_cloud/iteration_*"),key=lambda x:int(x.split("_")[-1]))
+    g_all_iterations = sorted(glob.glob(path+"/point_cloud/iteration_*"),key=lambda x:int(x.split("_")[-1]) if x.isnumeric() else -1)
     g_all_iterations = [Path(x).parts[-1] for x in g_all_iterations]
     cameras = json.load(open(path+"/cameras.json","r"))
     return update_iteration(len(g_all_iterations)-1)
@@ -287,6 +287,10 @@ def main():
                     )
                 if g_auto_sort:
                     sort_gaussian(gaussians)
+                    
+                # Perturb
+                if imgui.button(label="Perturb camera"):
+                    g_camera.random_perturb()
                 
                 if imgui.button(label='save image'):
                     width, height = glfw.get_framebuffer_size(window)
