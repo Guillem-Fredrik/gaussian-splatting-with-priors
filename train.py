@@ -27,7 +27,7 @@ from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from pathlib import Path
 import numpy as np
-from learned_regularisation.patch_pose_generator import PatchPoseGenerator, FrustumChecker, FrustumRegulariser
+from learned_regularisation.patch_pose_generator import PatchPoseGenerator, FrustumChecker, FrustumRegulariser, LenticularRegulariser
 from learned_regularisation.patch_regulariser import load_patch_diffusion_model, \
     PatchRegulariser, LLFF_DEFAULT_PSEUDO_INTRINSICS
 from learned_regularisation.utils import Intrinsics
@@ -53,7 +53,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end = torch.cuda.Event(enable_timing = True)
 
-    
     if opt.patch_regulariser_path:
         device = torch.device("cuda")
 
@@ -77,6 +76,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             min_near=opt.min_near,
             cameras=scene.getTrainCameras(),
         )
+        lenticular_regulariser = LenticularRegulariser(
+            reg_strength=1e-3,  # NB in the trainer this gets multiplied by the strength params passed in via the args TODO(guillem)
+            cameras=scene.getTrainCameras(),
+        )
 
         patch_diffusion_model = load_patch_diffusion_model(Path(opt.patch_regulariser_path))
         pose_generator = PatchPoseGenerator(cameras=scene.getTrainCameras(),
@@ -94,6 +97,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                                                 planar_depths=True,
                                                 frustum_regulariser=None,
                                                 # frustum_regulariser=frustum_regulariser if opt.frustum_regularise_patches else None,
+                                                lenticular_regulariser=None,
+                                                # lenticular_regulariser=lenticular_regulariser,
                                                 sample_downscale_factor=opt.patch_sample_downscale_factor,
                                                 uniform_in_depth_space=opt.normalise_diffusion_losses,
                                                 background=background,
@@ -143,10 +148,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
 
-        # if iteration % 100 == 0:
-        #     render_depth = render(viewpoint_cam, gaussians, pipe, background, render_depth=True)
-        #     xn = random.random()
-        #     torchvision.utils.save_image(render_depth["render"], 'debug/depth-{}.png'.format(xn))
+        # if iteration % 10 == 0:
+            # render_depth = render(viewpoint_cam, gaussians, pipe, background, render_depth=True)
+            # xn = random.random()
+            # torchvision.utils.save_image(render_depth["render"], 'debug/depth-{}.png'.format(xn))
+
+            # print("xyz", gaussians.get_xyz.shape, gaussians.get_xyz)
+            # print("_features_dc", gaussians._features_dc.shape, gaussians._features_dc)
+            # print("_features_rest", gaussians._features_rest.shape, gaussians._features_rest)
+            # print("features", gaussians.get_features.shape, gaussians.get_features)
+            # print("scaling", gaussians.get_scaling.shape, gaussians.get_scaling)
+            # print("rotation", gaussians.get_rotation.shape, gaussians.get_rotation)
+            # print("opacity", gaussians.get_opacity.shape, gaussians.get_opacity)
+            # print("covariance", gaussians.get_covariance().shape, gaussians.get_covariance())
 
         # Regularisation
         if opt.patch_regulariser_path:
@@ -196,6 +210,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     )
                     print('Patch frustum loss', patch_frustum_loss)
                     loss += patch_frustum_loss
+
+                # Lenticular reg        
+                if patch_regulariser.lenticular_regulariser is not None:
+                    lenticular_reg_weight = 1 # opt.frustum_reg_initial_weight if iteration < 100 else opt.frustum_reg_final_weight TODO(guillem)
+                    # sampled_indices = np.random.choice(gaussians.get_xyz.shape[0], 200, replace=False)
+                    sampled_indices = np.arange(gaussians.get_xyz.shape[0])
+                    patch_lenticular_loss = lenticular_reg_weight * patch_regulariser.lenticular_regulariser(
+                        xyzs=gaussians.get_xyz[sampled_indices].reshape(-1, 3), scales=gaussians.get_scaling[sampled_indices].reshape(-1, 3), weights=gaussians.get_opacity[sampled_indices].reshape(-1), covariances=gaussians.get_covariance()[sampled_indices].reshape(-1, 6),
+                    )
+                    loss += patch_lenticular_loss
 
         loss.backward()
 

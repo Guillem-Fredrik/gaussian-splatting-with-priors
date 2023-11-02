@@ -100,7 +100,7 @@ class Camera:
             yaw = -xoffset * self.rot_sensitivity
             pitch = yoffset * self.rot_sensitivity
 
-            front = rotation_matrix(up,yaw) @ rotation_matrix(right, pitch) @ front
+            front = rotation_matrix(up,yaw) @ (rotation_matrix(right, pitch) @ front)
             self.target[:] = self.position + front
             
             self.is_pose_dirty = True

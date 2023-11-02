@@ -109,6 +109,118 @@ class FrustumRegulariser:
         return loss.sum()
 
 
+class LenticularRegulariser:
+    def __init__(self, cameras: List[Camera], reg_strength: float, epsilon: float = 1e-1):
+        """
+        Frustum regulariser as described in the DiffusioNeRF paper. Exists to penalise placement of material
+        that is visible only in one frustum.
+        :param poses: List of poses for the training views, so that the i-th entry in poses if the pose of i-th training
+        view.
+        :param intrinsics: Intrinsics for the training views.
+        :param reg_strength: Multiplier for the loss function.
+        :param min_near: Points will be only considered to lie in a frustum if their depth is at least min_near. This should be the same
+        value of min_near which is used in rendering (i.e. whatever opt.min_near is).
+        """
+        self.cameras = cameras
+        self.reg_strength = reg_strength
+        self.epsilon = epsilon
+        assert self.epsilon >= 0.
+
+    def complete_orthonormal_basis(self, A: torch.Tensor) -> torch.Tensor:
+            # A is of shape (N, 3)
+
+            # Step 1: Create a set of arbitrary vectors U
+            U = torch.ones_like(A)
+            mask = torch.allclose(A, torch.tensor([1.0, 0.0, 0.0], device="cuda"), atol=1e-7)
+            U[mask] = torch.tensor([0.0, 1.0, 0.0], device="cuda")
+
+            # Step 2: Compute tensor B which is orthogonal to A
+            B = torch.cross(U, A, dim=1)
+
+            # Step 3: Normalize vectors in B
+            B = torch.nn.functional.normalize(B, dim=1)
+
+            # Step 4: Compute tensor C orthogonal to both A and B
+            C = torch.cross(A, B, dim=1)
+
+            # Step 5: Normalize vectors in C
+            C = torch.nn.functional.normalize(C, dim=1)
+
+            # Combine B and C into a single tensor of shape (N, 3, 2)
+            BC = torch.stack((B, C), dim=2)
+
+            return BC
+
+    def product_of_two_largest(self, tensor):
+        # Sort each row in descending order
+        sorted_vals, _ = torch.sort(tensor, dim=1, descending=True)
+
+        # Select the first two columns (largest values) and compute their product
+        result = sorted_vals[:, 0] * sorted_vals[:, 1]
+
+        return result, sorted_vals[:, 0]
+
+    def __call__(self, xyzs: torch.Tensor, scales: torch.Tensor, weights: torch.Tensor, covariances: torch.Tensor) -> torch.Tensor:
+        """
+        Compute the frustum regularisation loss for some points.
+        Will compute a loss proportional to the total amount of alpha-compositing weight which
+        is visible from fewer than frustum_count_thresh frustums.
+
+        :param xyzs: Points lying on rays which are being used in rendering.
+        :param weights: The weights used for each of those points in alpha-compositing.
+        :param frustum_count_thresh:
+        :param debug_vis_name: Optional name for writing debug point clouds.
+        :return: Frustum regularisation loss.
+        """
+
+        loss = torch.zeros(len(self.cameras))
+
+        covariance_matrices = torch.zeros((covariances.shape[0], 3, 3), dtype=torch.float, device="cuda")
+        
+        covariance_matrices[:, 0, 0] = covariances[:, 0]
+        covariance_matrices[:, 0, 1] = covariances[:, 1]
+        covariance_matrices[:, 1, 0] = covariances[:, 1]
+        covariance_matrices[:, 0, 2] = covariances[:, 2]
+        covariance_matrices[:, 2, 0] = covariances[:, 2]
+        covariance_matrices[:, 1, 1] = covariances[:, 3]
+        covariance_matrices[:, 1, 2] = covariances[:, 4]
+        covariance_matrices[:, 2, 1] = covariances[:, 4]
+        covariance_matrices[:, 2, 2] = covariances[:, 5]
+
+        # guassian_volumes = scales[:, 0]*scales[:, 1]*scales[:, 2]
+
+        # for i, camera in enumerate(self.cameras):
+        #     camera_center = camera.camera_center
+        #     camera_to_xyzs = xyzs - camera_center
+        #     camera_to_xyzs = torch.nn.functional.normalize(camera_to_xyzs)
+            
+        #     gaussian_depth = torch.bmm(camera_to_xyzs.unsqueeze(-2), torch.bmm(covariance_matrices, camera_to_xyzs.unsqueeze(-1)))
+        #     gaussian_areas_log = -torch.log(self.epsilon + guassian_volumes / (self.epsilon + gaussian_depth))
+
+        #     loss[i] = torch.mean(weights * gaussian_areas_log)
+
+        maximum_areas, maximum_lengths = self.product_of_two_largest(scales)
+
+        for i, camera in enumerate(self.cameras):
+            camera_center = camera.camera_center
+            camera_to_xyzs = xyzs - camera_center
+            camera_to_xyzs = torch.nn.functional.normalize(camera_to_xyzs)
+
+            gaussian_depth_2 = torch.bmm(camera_to_xyzs.unsqueeze(-2), torch.bmm(covariance_matrices, camera_to_xyzs.unsqueeze(-1))).squeeze()
+            gaussian_depths_log = torch.log(self.epsilon + maximum_lengths**2) - torch.log(self.epsilon + gaussian_depth_2)
+
+            ON = self.complete_orthonormal_basis(camera_to_xyzs)
+            orthogonal_covariance = torch.bmm(ON.transpose(1,2), torch.bmm(covariance_matrices, ON))
+            gaussian_areas_2 = orthogonal_covariance[:,0,0] * orthogonal_covariance[:,1,1] - orthogonal_covariance[:,0,1] * orthogonal_covariance[:,1,0]
+            gaussian_areas_log = torch.log(self.epsilon + maximum_areas**2) - torch.log(self.epsilon + gaussian_areas_2)
+
+            camera_loss = gaussian_depths_log + gaussian_areas_log
+
+            loss[i] = torch.mean(weights * camera_loss)
+
+        return self.reg_strength * loss.mean()
+
+
 class PatchPoseGenerator:
     """
     Generates poses at which to render patches, by taking the training poses and perturbing them.
