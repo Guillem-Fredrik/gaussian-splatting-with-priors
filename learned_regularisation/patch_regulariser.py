@@ -226,9 +226,9 @@ class PatchRegulariser:
 
         print('Num channels in diffusion model:', self._diffusion_model.channels)
 
-    def get_diffusion_loss_with_independent_patches(self, num_diffusion_patches: int, p_sample_patches: float, gaussians: GaussianModel,
+    def get_diffusion_loss_with_independent_patches(self, num_diffusion_patches: int, p_sample_patch: float, gaussians: GaussianModel,
         time, images, image_intrinsics, image_cameras):
-        sample_patch = np.random.random(num_diffusion_patches) < p_sample_patches
+        sample_patch = np.random.random(num_diffusion_patches) < p_sample_patch
         sampled_image_indices = np.random.choice(range(len(images)), num_diffusion_patches, replace=True)
 
         cameras = []
@@ -256,9 +256,9 @@ class PatchRegulariser:
 
     
 
-    def get_diffusion_loss(self, num_diffusion_patches: int, p_sample_patches: float, gaussians: GaussianModel,
+    def get_diffusion_loss(self, num_diffusion_patches: int, p_sample_patch: float, gaussians: GaussianModel,
         time, images, image_intrinsics, image_cameras):
-        if np.random.random() < p_sample_patches:
+        if np.random.random() < p_sample_patch:
             index = np.random.choice(range(len(images)))
             camera = image_cameras[index]
             image = images[index]

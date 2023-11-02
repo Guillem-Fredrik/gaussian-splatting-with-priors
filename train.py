@@ -106,7 +106,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
 
     viewpoint_stack = None
     ema_loss_for_log = 0.0
-    description_bar = tqdm(bar_format='[{desc}]')
+    description_bar = tqdm(bar_format='[{desc}{postfix}]', desc="Stats")
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
     for iteration in range(first_iter, opt.iterations + 1):        
@@ -219,7 +219,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
-                description_bar.set_description(", ".join([f'{k}: {v}' for k, v in {"Loss": f"{ema_loss_for_log:.{4}f}", "Loss_fg": f"{loss_fg:.{4}f}", "Loss_diffusion": f"{loss_diffusion:.{4}f}", "Loss_photo":f"{loss_photo:.{4}f}", "Loss_lc":f"{loss_lenticular:.{4}f}", "Num_gs": gaussians._xyz.shape[0]}.items()]))
+                description_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "Loss_fg": f"{loss_fg:.{4}f}", "Loss_diffusion": f"{loss_diffusion:.{4}f}", "Loss_photo":f"{loss_photo:.{4}f}", "Loss_lc":f"{loss_lenticular:.{4}f}", "Num_gs": gaussians._xyz.shape[0]})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 description.close()
