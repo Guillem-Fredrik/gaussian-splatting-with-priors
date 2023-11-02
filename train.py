@@ -37,7 +37,7 @@ try:
 except ImportError:
     TENSORBOARD_FOUND = False
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_every, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
@@ -47,7 +47,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
 
-    bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
+    bg_color = [1, 1, 1, dataset.bg_dist] if dataset.white_background else [0, 0, 0, dataset.bg_dist]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
     iter_start = torch.cuda.Event(enable_timing = True)
@@ -146,22 +146,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
-
-        # if iteration % 10 == 0:
-            # render_depth = render(viewpoint_cam, gaussians, pipe, background, render_depth=True)
-            # xn = random.random()
-            # torchvision.utils.save_image(render_depth["render"], 'debug/depth-{}.png'.format(xn))
-
-            # print("xyz", gaussians.get_xyz.shape, gaussians.get_xyz)
-            # print("_features_dc", gaussians._features_dc.shape, gaussians._features_dc)
-            # print("_features_rest", gaussians._features_rest.shape, gaussians._features_rest)
-            # print("features", gaussians.get_features.shape, gaussians.get_features)
-            # print("scaling", gaussians.get_scaling.shape, gaussians.get_scaling)
-            # print("rotation", gaussians.get_rotation.shape, gaussians.get_rotation)
-            # print("opacity", gaussians.get_opacity.shape, gaussians.get_opacity)
-            # print("covariance", gaussians.get_covariance().shape, gaussians.get_covariance())
-
+        loss_photo = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        loss_diffusion = 0
         # Regularisation
         if opt.patch_regulariser_path:
             # t schedule
@@ -191,7 +177,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         gaussians=gaussians, time=time, image=gt_image, image_intrinsics=intrinsics,
                         camera=viewpoint_cam
                     )
-                loss += weight * patch_outputs.loss
+                loss_diffusion = weight * patch_outputs.loss
 
                 # # Geometric reg
                 # if opt.apply_geom_reg_to_patches:
@@ -221,6 +207,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     )
                     loss += patch_lenticular_loss
 
+        # fg regularisation
+        loss_fg = render_pkg["render_opacity"].mean() * opt.fg_reg_weight
+
+        loss = loss_photo+loss_diffusion+loss_fg
         loss.backward()
 
         iter_end.record()
@@ -229,7 +219,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
+                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "Loss_fg": f"{loss_fg:.{4}f}", "Loss_diffusion": f"{loss_diffusion:.{4}f}", "Loss_photo":f"{loss_photo:.{4}f}"})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -239,9 +229,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
+            if save_every is not None and iteration%save_every == 0:
+                scene.save("current")
 
             # Densification
-            if iteration < opt.densify_until_iter:
+            if iteration < opt.densify_until_iter and gaussians._xyz.shape[0] < opt.max_gaussians:
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
@@ -249,6 +241,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
+                    
+                    print("Num gaussians", gaussians._xyz.shape[0])
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
@@ -333,6 +327,7 @@ if __name__ == "__main__":
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
+    parser.add_argument("--save_every", type=int, default=None)
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
@@ -347,7 +342,7 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.save_every, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
 
     # All done
     print("\nTraining complete.")
