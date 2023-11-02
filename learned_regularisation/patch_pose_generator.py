@@ -112,14 +112,11 @@ class FrustumRegulariser:
 class LenticularRegulariser:
     def __init__(self, cameras: List[Camera], reg_strength: float, epsilon: float = 1e-1):
         """
-        Frustum regulariser as described in the DiffusioNeRF paper. Exists to penalise placement of material
-        that is visible only in one frustum.
-        :param poses: List of poses for the training views, so that the i-th entry in poses if the pose of i-th training
+        Lenticular regulariser. Exists to penalise gaussians that are very flat (basically invisible) in the direction of one of the training cameras. As a side effect, gaussians tend to face the camera directly (i.e. be very flat in directions orthogonal to it), so we also penalise this.
+        :param cameras: List of cameras for the training views, so that the i-th entry in cameras is the camera of i-th training
         view.
-        :param intrinsics: Intrinsics for the training views.
         :param reg_strength: Multiplier for the loss function.
-        :param min_near: Points will be only considered to lie in a frustum if their depth is at least min_near. This should be the same
-        value of min_near which is used in rendering (i.e. whatever opt.min_near is).
+        :param epsilon: Small value to avoid numerical errors and prevent overly large gradients. Should not be too small
         """
         self.cameras = cameras
         self.reg_strength = reg_strength
@@ -162,15 +159,13 @@ class LenticularRegulariser:
 
     def __call__(self, xyzs: torch.Tensor, scales: torch.Tensor, weights: torch.Tensor, covariances: torch.Tensor) -> torch.Tensor:
         """
-        Compute the frustum regularisation loss for some points.
-        Will compute a loss proportional to the total amount of alpha-compositing weight which
-        is visible from fewer than frustum_count_thresh frustums.
+        Compute the lenticular regularisation loss for some gaussians.
 
-        :param xyzs: Points lying on rays which are being used in rendering.
+        :param xyzs: Centers of the gaussians.
+        :param scales: Scales of the gaussians in their principal directions.
         :param weights: The weights used for each of those points in alpha-compositing.
-        :param frustum_count_thresh:
-        :param debug_vis_name: Optional name for writing debug point clouds.
-        :return: Frustum regularisation loss.
+        :param covariances: Covariance matrices (or rather, array of its entries) for the gaussians in world space.
+        :return: Lenticular regularisation loss.
         """
 
         loss = torch.zeros(len(self.cameras))
@@ -214,7 +209,7 @@ class LenticularRegulariser:
             gaussian_areas_2 = orthogonal_covariance[:,0,0] * orthogonal_covariance[:,1,1] - orthogonal_covariance[:,0,1] * orthogonal_covariance[:,1,0]
             gaussian_areas_log = torch.log(self.epsilon + maximum_areas**2) - torch.log(self.epsilon + gaussian_areas_2)
 
-            camera_loss = gaussian_depths_log + gaussian_areas_log
+            camera_loss = 3e-1*gaussian_depths_log + gaussian_areas_log
 
             loss[i] = torch.mean(weights * camera_loss)
 

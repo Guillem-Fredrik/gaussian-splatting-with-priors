@@ -106,6 +106,9 @@ class OptimizationParams(ParamGroup):
         self.min_near = 0.05
         self.frustum_reg_initial_weight = 1.
         self.frustum_reg_final_weight = 1e-2
+        # Lenticular regularisation
+        self.lenticular_reg_initial_weight = 1.
+        self.lenticular_reg_final_weight = 1e-2
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):
