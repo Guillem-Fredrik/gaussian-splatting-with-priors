@@ -11,6 +11,7 @@
 
 import os
 import torch
+import torchvision
 import random
 from random import randint
 from utils.loss_utils import l1_loss, ssim
@@ -26,7 +27,7 @@ from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from pathlib import Path
 import numpy as np
-from learned_regularisation.patch_pose_generator import PatchPoseGenerator
+from learned_regularisation.patch_pose_generator import PatchPoseGenerator, FrustumChecker, FrustumRegulariser, LenticularRegulariser
 from learned_regularisation.patch_regulariser import load_patch_diffusion_model, \
     PatchRegulariser, LLFF_DEFAULT_PSEUDO_INTRINSICS
 from learned_regularisation.utils import Intrinsics
@@ -36,7 +37,7 @@ try:
 except ImportError:
     TENSORBOARD_FOUND = False
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_every, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
@@ -46,24 +47,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
 
-    bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
+    bg_color = [1, 1, 1, dataset.bg_dist] if dataset.white_background else [0, 0, 0, dataset.bg_dist]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end = torch.cuda.Event(enable_timing = True)
 
-    
     if opt.patch_regulariser_path:
         device = torch.device("cuda")
-        patch_diffusion_model = load_patch_diffusion_model(Path(opt.patch_regulariser_path))
-        pose_generator = PatchPoseGenerator(cameras=scene.getTrainCameras(),
-                                            spatial_perturbation_magnitude=0.2,
-                                            angular_perturbation_magnitude_rads=0.2 * np.pi,
-                                            no_perturb_prob=0.,
-                                            # frustum_checker=frustum_checker if opt.frustum_check_patches else None
-                        )
-        # pseudo_intrinsics = LLFF_DEFAULT_PSEUDO_INTRINSICS
+
         camera = scene.getTrainCameras()[0]
+        # pseudo_intrinsics = LLFF_DEFAULT_PSEUDO_INTRINSICS
         W = camera.image_width
         H = camera.image_height
         intrinsics = Intrinsics(
@@ -74,6 +68,26 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             W,
             H
         )
+
+        frustum_checker = FrustumChecker(fov_x_rads=camera.FoVx, fov_y_rads=camera.FoVy)
+        frustum_regulariser = FrustumRegulariser(
+            intrinsics=intrinsics,
+            reg_strength=1e-5,  # NB in the trainer this gets multiplied by the strength params passed in via the args
+            min_near=opt.min_near,
+            cameras=scene.getTrainCameras(),
+        )
+        lenticular_regulariser = LenticularRegulariser(
+            reg_strength=1e-3,  # NB in the trainer this gets multiplied by the strength params passed in via the args TODO(guillem)
+            cameras=scene.getTrainCameras(),
+        )
+
+        patch_diffusion_model = load_patch_diffusion_model(Path(opt.patch_regulariser_path))
+        pose_generator = PatchPoseGenerator(cameras=scene.getTrainCameras(),
+                                            spatial_perturbation_magnitude=0.2,
+                                            angular_perturbation_magnitude_rads=0.2 * np.pi,
+                                            no_perturb_prob=0.,
+                                            frustum_checker=frustum_checker if opt.frustum_check_patches else None
+                        )
         
         print('Using patch intrinsics', intrinsics)
         patch_regulariser = PatchRegulariser(pose_generator=pose_generator,
@@ -81,7 +95,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                                                 full_image_intrinsics=intrinsics,
                                                 device=device,
                                                 planar_depths=True,
-                                                frustum_regulariser=None, # frustum_regulariser=frustum_regulariser if opt.frustum_regularise_patches else None,
+                                                frustum_regulariser=None,
+                                                # frustum_regulariser=frustum_regulariser if opt.frustum_regularise_patches else None,
+                                                lenticular_regulariser=None,
+                                                # lenticular_regulariser=lenticular_regulariser,
                                                 sample_downscale_factor=opt.patch_sample_downscale_factor,
                                                 uniform_in_depth_space=opt.normalise_diffusion_losses,
                                                 background=background,
@@ -125,14 +142,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             pipe.debug = True
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-        # print("image", image.shape, image) # DEBUG(guillem)
-        # print("viewspace_point_tensor", viewspace_point_tensor.shape, viewspace_point_tensor) # DEBUG(guillem)
 
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
-
+        loss_photo = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        loss_diffusion = 0
         # Regularisation
         if opt.patch_regulariser_path:
             # t schedule
@@ -162,24 +177,40 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         gaussians=gaussians, time=time, image=gt_image, image_intrinsics=intrinsics,
                         camera=viewpoint_cam
                     )
-                loss += weight * patch_outputs.loss
+                loss_diffusion = weight * patch_outputs.loss
 
                 # # Geometric reg
                 # if opt.apply_geom_reg_to_patches:
                 #     loss += spread_loss_weight * patch_outputs.render_outputs['loss_dist']
 
-                # # Frustum reg
-                # if patch_regulariser.frustum_regulariser is not None:
-                #     xyzs_flat = patch_outputs.render_outputs['xyzs'].reshape(-1, 3)
-                #     weights_flat = patch_outputs.render_outputs['weights'].reshape(-1)
+                # Frustum reg        
+                if patch_regulariser.frustum_regulariser is not None:
+                    frustum_reg_weight = opt.frustum_reg_initial_weight if iteration < 100 else opt.frustum_reg_final_weight
 
-                #     patch_frustum_reg_weight = get_frustum_reg_str()
-                #     patch_frustum_loss = patch_frustum_reg_weight * patch_regulariser.frustum_regulariser(
-                #         xyzs=xyzs_flat, weights=weights_flat, frustum_count_thresh=1,
-                #     )
-                #     print('Patch frustum loss', patch_frustum_loss)
-                #     loss += patch_frustum_loss
+                    xyzs_flat = patch_outputs.render_outputs['xyzs'].reshape(-1, 3)
+                    weights_flat = patch_outputs.render_outputs['weights'].reshape(-1)
 
+                    patch_frustum_reg_weight = frustum_reg_weight
+                    patch_frustum_loss = patch_frustum_reg_weight * patch_regulariser.frustum_regulariser(
+                        xyzs=xyzs_flat, weights=weights_flat, frustum_count_thresh=1,
+                    )
+                    print('Patch frustum loss', patch_frustum_loss)
+                    loss += patch_frustum_loss
+
+                # Lenticular reg        
+                if patch_regulariser.lenticular_regulariser is not None:
+                    lenticular_reg_weight = 1 # opt.frustum_reg_initial_weight if iteration < 100 else opt.frustum_reg_final_weight TODO(guillem)
+                    # sampled_indices = np.random.choice(gaussians.get_xyz.shape[0], 200, replace=False)
+                    sampled_indices = np.arange(gaussians.get_xyz.shape[0])
+                    patch_lenticular_loss = lenticular_reg_weight * patch_regulariser.lenticular_regulariser(
+                        xyzs=gaussians.get_xyz[sampled_indices].reshape(-1, 3), scales=gaussians.get_scaling[sampled_indices].reshape(-1, 3), weights=gaussians.get_opacity[sampled_indices].reshape(-1), covariances=gaussians.get_covariance()[sampled_indices].reshape(-1, 6),
+                    )
+                    loss += patch_lenticular_loss
+
+        # fg regularisation
+        loss_fg = render_pkg["render_opacity"].mean() * opt.fg_reg_weight
+
+        loss = loss_photo+loss_diffusion+loss_fg
         loss.backward()
 
         iter_end.record()
@@ -188,7 +219,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
+                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "Loss_fg": f"{loss_fg:.{4}f}", "Loss_diffusion": f"{loss_diffusion:.{4}f}", "Loss_photo":f"{loss_photo:.{4}f}"})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -198,9 +229,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
+            if save_every is not None and iteration%save_every == 0:
+                scene.save("current")
 
             # Densification
-            if iteration < opt.densify_until_iter:
+            if iteration < opt.densify_until_iter and gaussians._xyz.shape[0] < opt.max_gaussians:
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
@@ -208,6 +241,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
+                    
+                    print("Num gaussians", gaussians._xyz.shape[0])
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
@@ -292,6 +327,7 @@ if __name__ == "__main__":
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
+    parser.add_argument("--save_every", type=int, default=None)
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
@@ -306,7 +342,7 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.save_every, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
 
     # All done
     print("\nTraining complete.")

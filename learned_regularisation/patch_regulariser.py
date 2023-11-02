@@ -14,7 +14,7 @@ import torchvision
 
 from learned_regularisation.diffusion.denoising_diffusion_pytorch import Unet, GaussianDiffusion, Trainer, \
     normalize_to_neg_one_to_one, unnormalize_to_zero_to_one
-from learned_regularisation.patch_pose_generator import PatchPoseGenerator, FrustumRegulariser
+from learned_regularisation.patch_pose_generator import PatchPoseGenerator, FrustumRegulariser, LenticularRegulariser
 from learned_regularisation.utils import get_rays, apply_intrinsics_to_camera, Intrinsics
 from scene import GaussianModel
 from gaussian_renderer import render
@@ -188,7 +188,7 @@ class PatchRegulariser:
     """
     def __init__(self, pose_generator: PatchPoseGenerator, patch_diffusion_model: GaussianDiffusion,
                  full_image_intrinsics: Intrinsics, device,
-                 planar_depths: bool, frustum_regulariser: Optional[FrustumRegulariser], image_sample_prob: float = 0.,
+                 planar_depths: bool, frustum_regulariser: Optional[FrustumRegulariser], lenticular_regulariser: Optional[LenticularRegulariser], image_sample_prob: float = 0.,
                  uniform_in_depth_space: bool = False,
                  sample_downscale_factor: int = 4,
                  background: torch.Tensor = torch.tensor([1, 1, 1]),
@@ -214,6 +214,7 @@ class PatchRegulariser:
         self._planar_depths = planar_depths
         self._image_sample_prob = image_sample_prob
         self.frustum_regulariser = frustum_regulariser
+        self.lenticular_regulariser = lenticular_regulariser
         self._uniform_in_depth_space = uniform_in_depth_space
         self._sample_downscale_factor = sample_downscale_factor
         self._depth_preprocessor = DepthPreprocessor(min_depth=0.2)
@@ -231,7 +232,7 @@ class PatchRegulariser:
                                        render_outputs=render_outputs)
         
         # DEBUG(guillem)
-        # if random.random() > 0.98:
+        # if random.random() > 1.98:
         #     xn = random.random()
         #     torchvision.utils.save_image((patch_outputs.images["rendered_rgb"].clamp(0, 1)).permute(0, 3, 1, 2), 'debug/{}-a-rgb.png'.format(xn))
         #     torchvision.utils.save_image((torch.repeat_interleave(patch_outputs.images["rendered_depth"], repeats=3, dim=-1).clamp(0, 1)).permute(0, 3, 1, 2), 'debug/{}-a-d.png'.format(xn))
@@ -353,13 +354,12 @@ class PatchRegulariser:
 
     def _render_patch_with_intrinsics(self, intrinsics, camera, gaussians):
         viewpoint_cam = apply_intrinsics_to_camera(intrinsics, camera, self._full_image_intrinsics) 
-        render_pkg_rgb = render(viewpoint_cam, gaussians, self.pipe, self.background)
-        render_pkg_depth = render(viewpoint_cam, gaussians, self.pipe, self.background, render_depth=True)
+        render_pkg = render(viewpoint_cam, gaussians, self.pipe, self.background)
         patch_rays = get_the_rays(intrinsics, H=self._patch_size, W=self._patch_size, device="cuda")
 
         outputs = {
-            'depth': render_pkg_depth["render"][0,:],
-            'image': render_pkg_rgb["render"].reshape(3, intrinsics.height, intrinsics.width).permute(1, 2, 0)  # (B, C, H, W) -> (B, H, W, C),
+            'depth': render_pkg["render_depth"][0,:],
+            'image': render_pkg["render"].reshape(3, intrinsics.height, intrinsics.width).permute(1, 2, 0)  # (B, C, H, W) -> (B, H, W, C),
         }
 
         if self._planar_depths:

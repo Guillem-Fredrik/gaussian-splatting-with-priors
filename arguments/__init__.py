@@ -52,6 +52,7 @@ class ModelParams(ParamGroup):
         self._images = "images"
         self._resolution = -1
         self._white_background = False
+        self.bg_dist = 500
         self.data_device = "cuda"
         self.eval = False
         self.num_train_images = 3
@@ -65,7 +66,7 @@ class ModelParams(ParamGroup):
 
 class PipelineParams(ParamGroup):
     def __init__(self, parser):
-        self.convert_SHs_python = False
+        self.convert_SHs_python = True
         self.compute_cov3D_python = False
         self.debug = False
         super().__init__(parser, "Pipeline Parameters")
@@ -88,15 +89,23 @@ class OptimizationParams(ParamGroup):
         self.densify_from_iter = 500
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0002
+        self.max_gaussians = 1000000
+        # Regularisation
+        self.fg_reg_weight = 0.02
         # Patch regularisation
         self.patch_regulariser_path = ""
         self.initial_diffusion_time = 0.1
         self.patch_reg_start_step = 500
         self.patch_reg_finish_step = 2500
-        self.patch_weight_start = 1.
-        self.patch_weight_finish = 1.
+        self.patch_weight_start = 1
+        self.patch_weight_finish = 1
         self.patch_sample_downscale_factor = 4
         self.normalise_diffusion_losses = False
+        self.frustum_check_patches = False
+        # Frustum regularisation
+        self.min_near = 0.05
+        self.frustum_reg_initial_weight = 1.
+        self.frustum_reg_final_weight = 1e-2
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):
