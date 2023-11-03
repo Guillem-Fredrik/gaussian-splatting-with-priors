@@ -298,7 +298,7 @@ def perturb_camera(camera, spatial_mag: float, angular_mag: float):
 
     new_camera = Camera(camera.colmap_id, new_rotation, new_translation, camera.FoVx, camera.FoVy, camera.original_image, None,
         camera.image_name, camera.uid,
-        trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda"
+        trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = camera.data_device
         )
 
     return new_camera

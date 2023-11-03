@@ -7,6 +7,13 @@ import ctypes
 from scipy.spatial.transform import Rotation
 import glfw
 import torch
+import os
+import sys
+
+parent_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.append(parent_dir)
+from learned_regularisation.patch_pose_generator import perturb_camera 
+from scene.cameras import Camera as SceneCamera
 
 def rotation_matrix(axis, theta):
     """
@@ -162,15 +169,18 @@ class Camera:
         
         self.is_pose_dirty = True
     
-    def random_perturb(self, spatial_mag=0.2, angular_mag=0.2 * np.pi):
-        cam_centre_perturbation = spatial_mag * (2. * np.random.rand(3,) - 1.)
-        self.position += cam_centre_perturbation
+    def random_perturb(self):
+        up, right, front = self.get_dir_vecs()
+        camera = SceneCamera(0, np.array([up,right,front]).T, self.position, self.fovy, self.fovy, torch.tensor([[[0]]]), None,
+            "", 0, trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cpu"
+        )
+        camera = perturb_camera(camera,spatial_mag=0.2,angular_mag=0.2 * np.pi)
         
-        rotation_perturbation = Rotation.random().as_rotvec() * (angular_mag / (2. * np.pi))
-        rotation_perturbation = Rotation.from_rotvec(rotation_perturbation).as_matrix()
-        self.target = self.position + rotation_perturbation @ np.asarray(self.target - self.position)
-        self.up = rotation_perturbation @ np.asarray(self.up)
-    
+        up,right,front = camera.R.T
+        self.up = up
+        self.target = self.position+front
+        self.position = camera.T
+        
     def update_resolution(self, height, width):
         self.h = height
         self.w = width
