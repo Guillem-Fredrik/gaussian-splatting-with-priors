@@ -84,7 +84,16 @@ class Scene:
                                                            "iteration_" + str(self.loaded_iter),
                                                            "point_cloud.ply"))
         else:
-            self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
+            if args.random_initialisation:
+                from utils.sh_utils import SH2RGB
+                from scene.gaussian_model import BasicPointCloud
+                num_pts = 10000
+                xyz = (np.random.random((num_pts, 3)) - 0.5 )*100
+                shs = np.random.random((num_pts, 3)) / 255.0
+                pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+                self.gaussians.create_from_pcd(pcd, self.cameras_extent)
+            else:
+                self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))

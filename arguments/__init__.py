@@ -57,6 +57,7 @@ class ModelParams(ParamGroup):
         self.eval = False
         self.num_train_images = 3
         self.camera_radius_scale = 0.33 # `scale` parameter in DiffusioNerf
+        self.random_initialisation = False
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
