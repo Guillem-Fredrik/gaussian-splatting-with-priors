@@ -18,6 +18,7 @@ from learned_regularisation.patch_pose_generator import PatchPoseGenerator, Frus
 from learned_regularisation.utils import get_rays, apply_intrinsics_to_camera, Intrinsics
 from scene import GaussianModel
 from gaussian_renderer import render
+from utils.graphics_utils import focal2fov
 
 
 class DepthPreprocessor:
@@ -43,13 +44,12 @@ class DepthPreprocessor:
         # Linearly transform to range [0, 1], just like an rgb channel. The trainer will then transform to [-1, 1].
         inv_depth = inv_depth * self.min_depth
 
-        self.range_min = inv_depth.min()
         self.range_max = inv_depth.max()
 
-        return (inv_depth - self.range_min) / (self.range_max - self.range_min)
+        return inv_depth / self.range_max
 
     def invert(self, inv_depth):
-        inv_depth = inv_depth * (self.range_max - self.range_min) + self.range_min
+        inv_depth = inv_depth * self.range_max
         inv_depth = inv_depth / self.min_depth
 
         depth = 1. / inv_depth
@@ -78,13 +78,14 @@ def make_random_patch_intrinsics(patch_size: int, full_image_intrinsics: Intrins
     :param downscale_factor: Number of original image pixels per patch pixel. If 1, no downscaling occurs
     :return: Intrinsics for patch as described above
     """
+    effective_downscale_factor = int(downscale_factor * full_image_intrinsics.width / 1024)
     intrinsics_downscaled = Intrinsics(
-        fx=full_image_intrinsics.fx // downscale_factor,
-        fy=full_image_intrinsics.fy // downscale_factor,
-        cx=full_image_intrinsics.cx // downscale_factor,
-        cy=full_image_intrinsics.cy // downscale_factor,
-        width=full_image_intrinsics.width // downscale_factor,
-        height=full_image_intrinsics.height // downscale_factor,
+        fx=full_image_intrinsics.fx // effective_downscale_factor,
+        fy=full_image_intrinsics.fy // effective_downscale_factor,
+        cx=full_image_intrinsics.cx // effective_downscale_factor,
+        cy=full_image_intrinsics.cy // effective_downscale_factor,
+        width=full_image_intrinsics.width // effective_downscale_factor,
+        height=full_image_intrinsics.height // effective_downscale_factor,
     )
 
     # Allow our sampled patch to extend past the edges of the img, as long as it overlaps at least marginally with it
@@ -308,10 +309,12 @@ class PatchRegulariser:
                 torch.cat([
                     patch_outputs.images["rendered_rgb"][0],
                     patch_outputs.images["pred_rgb_x0"][0],
+                    patch_outputs.images["pred_rgb_noise"][0]
                 ], dim=1),
                 torch.cat([
                     torch.repeat_interleave((patch_outputs.images["rendered_depth"][0] - m) / (M - m), repeats=3, dim=-1),
-                    torch.repeat_interleave(((patch_outputs.images["pred_depth_x0"][0].unsqueeze(-1) - m) / (M - m)).clamp(0,1), repeats=3, dim=-1)
+                    torch.repeat_interleave(((patch_outputs.images["pred_depth_x0"][0].unsqueeze(-1) - m) / (M - m)).clamp(0,1), repeats=3, dim=-1),
+                    torch.repeat_interleave((0.5 + 0.25*patch_outputs.images["pred_disp_noise"][0].unsqueeze(-1)).clamp(0,1), repeats=3, dim=-1)
                 ], dim=1)
             ], dim=0)
             torchvision.utils.save_image(debug_image.permute((2,0,1)), f'output/diffusion_inputs_outputs.png')
@@ -407,6 +410,7 @@ class PatchRegulariser:
                 'pred_disp_noise': pred_noise_bhwc[..., -1],
                 'pred_disp_x0': pred_x0_bhwc[..., -1],
                 'pred_depth_x0': self._depth_preprocessor.invert(pred_x0_bhwc[..., -1]),
+                'pred_rgb_noise': pred_noise_bhwc[..., :-1],
                 'pred_rgb_x0': pred_x0_bhwc[...,:-1]
             },
             loss=diffusion_pseudo_loss,
