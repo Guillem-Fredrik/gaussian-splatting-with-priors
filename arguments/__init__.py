@@ -98,8 +98,8 @@ class OptimizationParams(ParamGroup):
         self.initial_diffusion_time = 0.1
         self.patch_reg_start_step = 500
         self.patch_reg_finish_step = 2500
-        self.patch_weight_start = 1
-        self.patch_weight_finish = 1
+        self.patch_weight_start = 1.
+        self.patch_weight_finish = 1.
         self.patch_sample_downscale_factor = 4
         self.normalise_diffusion_losses = False
         self.frustum_check_patches = False

@@ -174,7 +174,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                 else:
                     raise RuntimeError('Internal error')
 
-                p_sample_patch = 0.5 - 0.4*lambda_t
+                p_sample_patch = 0.4 - 0.35*lambda_t
                 num_diffusion_patches = 8
 
                 cameras = scene.getTrainCameras()

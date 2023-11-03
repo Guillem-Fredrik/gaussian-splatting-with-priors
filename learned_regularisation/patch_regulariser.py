@@ -78,7 +78,7 @@ def make_random_patch_intrinsics(patch_size: int, full_image_intrinsics: Intrins
     :param downscale_factor: Number of original image pixels per patch pixel. If 1, no downscaling occurs
     :return: Intrinsics for patch as described above
     """
-    effective_downscale_factor = int(downscale_factor * full_image_intrinsics.width / 1024)
+    effective_downscale_factor = int(downscale_factor * full_image_intrinsics.width / 512)
     intrinsics_downscaled = Intrinsics(
         fx=full_image_intrinsics.fx // effective_downscale_factor,
         fy=full_image_intrinsics.fy // effective_downscale_factor,
@@ -276,12 +276,11 @@ class PatchRegulariser:
             rgb_patch = torch.zeros((num_diffusion_patches, self._patch_size, self._patch_size, 3), device="cuda")
             depth_patch = torch.zeros((num_diffusion_patches, self._patch_size, self._patch_size, 1), device="cuda")
 
-            with torch.no_grad():
-                for i in range(num_diffusion_patches):
-                    patch_intrinsics = self._get_random_patch_intrinsics()
-                    patch_rays = get_the_rays(patch_intrinsics, H=self._patch_size, W=self._patch_size, device="cuda")
-                    rgb_patch[i] = sample_patch_from_img(rays_d=patch_rays, img=image, img_intrinsics=image_intrinsic, patch_size=self._patch_size)
-                    depth_patch[i] = sample_patch_from_img(rays_d=patch_rays, img=image_depth_patch.squeeze(0).permute(2,0,1), img_intrinsics=image_intrinsic, patch_size=self._patch_size)
+            for i in range(num_diffusion_patches):
+                patch_intrinsics = self._get_random_patch_intrinsics()
+                patch_rays = get_the_rays(patch_intrinsics, H=self._patch_size, W=self._patch_size, device="cuda")
+                rgb_patch[i] = sample_patch_from_img(rays_d=patch_rays, img=image, img_intrinsics=image_intrinsic, patch_size=self._patch_size)
+                depth_patch[i] = sample_patch_from_img(rays_d=patch_rays, img=image_depth_patch.squeeze(0).permute(2,0,1), img_intrinsics=image_intrinsic, patch_size=self._patch_size)
 
         else:
             camera = self._pose_generator.generate_random().to(self._device)
@@ -292,12 +291,11 @@ class PatchRegulariser:
             rgb_patch = torch.zeros((num_diffusion_patches, self._patch_size, self._patch_size, 3), device="cuda")
             depth_patch = torch.zeros((num_diffusion_patches, self._patch_size, self._patch_size, 1), device="cuda")
 
-            with torch.no_grad():
-                for i in range(num_diffusion_patches):
-                    patch_intrinsics = self._get_random_patch_intrinsics()
-                    patch_rays = get_the_rays(patch_intrinsics, H=self._patch_size, W=self._patch_size, device="cuda")
-                    rgb_patch[i] = sample_patch_from_img(rays_d=patch_rays, img=image_rgb_patch.squeeze(0).permute(2,0,1), img_intrinsics=image_intrinsic, patch_size=self._patch_size)
-                    depth_patch[i] = sample_patch_from_img(rays_d=patch_rays, img=image_depth_patch.squeeze(0).permute(2,0,1), img_intrinsics=image_intrinsic, patch_size=self._patch_size)
+            for i in range(num_diffusion_patches):
+                patch_intrinsics = self._get_random_patch_intrinsics()
+                patch_rays = get_the_rays(patch_intrinsics, H=self._patch_size, W=self._patch_size, device="cuda")
+                rgb_patch[i] = sample_patch_from_img(rays_d=patch_rays, img=image_rgb_patch.squeeze(0).permute(2,0,1), img_intrinsics=image_intrinsic, patch_size=self._patch_size)
+                depth_patch[i] = sample_patch_from_img(rays_d=patch_rays, img=image_depth_patch.squeeze(0).permute(2,0,1), img_intrinsics=image_intrinsic, patch_size=self._patch_size)
 
         patch_outputs = self.get_loss_for_patches(depth_patch=depth_patch, rgb_patch=rgb_patch, time=time,
                                        render_outputs={})
@@ -318,6 +316,8 @@ class PatchRegulariser:
                 ], dim=1)
             ], dim=0)
             torchvision.utils.save_image(debug_image.permute((2,0,1)), f'output/diffusion_inputs_outputs.png')
+            # torchvision.utils.save_image(image_rgb_patch[0].permute((2,0,1)), f'output/prepatch-rgb.png')
+            # torchvision.utils.save_image((image_depth_patch[0]-m)/(M-m).permute((2,0,1)), f'output/prepatch-depth.png')
 
         return patch_outputs
 
