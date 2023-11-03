@@ -266,13 +266,6 @@ class PatchRegulariser:
 
             image_depth_patch, image_rgb_patch, _, _ = self._render_patches_with_intrinsics(intrinsics=[image_intrinsic], cameras=[camera], gaussians=gaussians)
 
-            # DEBUG(guillem)
-            # if random.random() > 0.98:
-            #     xn = random.random()
-            #     torchvision.utils.save_image((image_rgb_patch.clamp(0, 1)).permute(0, 3, 1, 2), 'debug/s{}-a-rgb.png'.format(xn))
-            #     torchvision.utils.save_image((torch.repeat_interleave(image_depth_patch, repeats=3, dim=-1).clamp(0, 1)).permute(0, 3, 1, 2), 'debug/s{}-a-d.png'.format(xn))
-            #     torchvision.utils.save_image(image, 'debug/s-{}-r-rgb.png'.format(xn))
-
             rgb_patch = torch.zeros((num_diffusion_patches, self._patch_size, self._patch_size, 3), device="cuda")
             depth_patch = torch.zeros((num_diffusion_patches, self._patch_size, self._patch_size, 1), device="cuda")
 
@@ -280,10 +273,8 @@ class PatchRegulariser:
                 for i in range(num_diffusion_patches):
                     patch_intrinsics = self._get_random_patch_intrinsics()
                     patch_rays = get_the_rays(patch_intrinsics, H=self._patch_size, W=self._patch_size, device="cuda")
-                    rgb_patch[i] = sample_patch_from_img(rays_d=patch_rays, img=image,
-                                    img_intrinsics=image_intrinsic, patch_size=self._patch_size)
-                    depth_patch[i] = sample_patch_from_img(rays_d=patch_rays, img=image_depth_patch.squeeze(0).permute(2,0,1),
-                                    img_intrinsics=image_intrinsic, patch_size=self._patch_size)
+                    rgb_patch[i] = sample_patch_from_img(rays_d=patch_rays, img=image, img_intrinsics=image_intrinsic, patch_size=self._patch_size)
+                    depth_patch[i] = sample_patch_from_img(rays_d=patch_rays, img=image_depth_patch.squeeze(0).permute(2,0,1), img_intrinsics=image_intrinsic, patch_size=self._patch_size)
 
         else:
             camera = self._pose_generator.generate_random().to(self._device)
@@ -291,12 +282,6 @@ class PatchRegulariser:
 
             image_depth_patch, image_rgb_patch, _, _ = self._render_patches_with_intrinsics(intrinsics=[image_intrinsic], cameras=[camera], gaussians=gaussians)
 
-            # DEBUG(guillem)
-            # if random.random() > 0.98:
-            #     xn = random.random()
-            #     torchvision.utils.save_image((image_rgb_patch.clamp(0, 1)).permute(0, 3, 1, 2), 'debug/r{}-a-rgb.png'.format(xn))
-            #     torchvision.utils.save_image((torch.repeat_interleave(image_depth_patch, repeats=3, dim=-1).clamp(0, 1)).permute(0, 3, 1, 2), 'debug/r{}-a-d.png'.format(xn))
-
             rgb_patch = torch.zeros((num_diffusion_patches, self._patch_size, self._patch_size, 3), device="cuda")
             depth_patch = torch.zeros((num_diffusion_patches, self._patch_size, self._patch_size, 1), device="cuda")
 
@@ -304,17 +289,27 @@ class PatchRegulariser:
                 for i in range(num_diffusion_patches):
                     patch_intrinsics = self._get_random_patch_intrinsics()
                     patch_rays = get_the_rays(patch_intrinsics, H=self._patch_size, W=self._patch_size, device="cuda")
-                    rgb_patch[i] = sample_patch_from_img(rays_d=patch_rays, img=image_rgb_patch.squeeze(0).permute(2,0,1),
-                                    img_intrinsics=image_intrinsic, patch_size=self._patch_size)
-                    depth_patch[i] = sample_patch_from_img(rays_d=patch_rays, img=image_depth_patch.squeeze(0).permute(2,0,1),
-                                    img_intrinsics=image_intrinsic, patch_size=self._patch_size)
-
-
-        
-        
+                    rgb_patch[i] = sample_patch_from_img(rays_d=patch_rays, img=image_rgb_patch.squeeze(0).permute(2,0,1), img_intrinsics=image_intrinsic, patch_size=self._patch_size)
+                    depth_patch[i] = sample_patch_from_img(rays_d=patch_rays, img=image_depth_patch.squeeze(0).permute(2,0,1), img_intrinsics=image_intrinsic, patch_size=self._patch_size)
 
         patch_outputs = self.get_loss_for_patches(depth_patch=depth_patch, rgb_patch=rgb_patch, time=time,
                                        render_outputs={})
+        
+        debug = False
+        if debug:
+            M = image_depth_patch.max()
+            m = image_depth_patch.min()
+            debug_image = torch.cat([
+                torch.cat([
+                    patch_outputs.images["rendered_rgb"][0],
+                    patch_outputs.images["pred_rgb_x0"][0],
+                ], dim=1),
+                torch.cat([
+                    torch.repeat_interleave((patch_outputs.images["rendered_depth"][0] - m) / (M - m), repeats=3, dim=-1),
+                    torch.repeat_interleave(((patch_outputs.images["pred_depth_x0"][0].unsqueeze(-1) - m) / (M - m)).clamp(0,1), repeats=3, dim=-1)
+                ], dim=1)
+            ], dim=0)
+            torchvision.utils.save_image(debug_image.permute((2,0,1)), f'output/diffusion_inputs_outputs.png')
 
         return patch_outputs
 
@@ -407,6 +402,7 @@ class PatchRegulariser:
                 'pred_disp_noise': pred_noise_bhwc[..., -1],
                 'pred_disp_x0': pred_x0_bhwc[..., -1],
                 'pred_depth_x0': self._depth_preprocessor.invert(pred_x0_bhwc[..., -1]),
+                'pred_rgb_x0': pred_x0_bhwc[...,:-1]
             },
             loss=diffusion_pseudo_loss,
             depth_patch=depth_patch,
@@ -451,13 +447,13 @@ class PatchRegulariser:
             render_pkg = render(viewpoint_cam, gaussians, self.pipe, self.background)
             rays = get_the_rays(intrinsic, H=H, W=W, device="cuda")
 
-            outputs["depth"][i] = render_pkg["render_depth"][0,:]
+            outputs["depth"][i] = render_pkg["render_depth"]
             outputs["image"][i] = render_pkg["render"].reshape(3, H, W).permute(1, 2, 0) # (B, C, H, W) -> (B, H, W, C)
 
             if self._planar_depths:
-                depth = render_pkg["render_depth"][0,:] * rays[..., -1]
+                depth = render_pkg["render_depth"] * rays[..., -1]
             else:
-                depth = render_pkg["render_depth"][0,:]
+                depth = render_pkg["render_depth"]
 
             patch_rays[i] = rays
             pred_depth[i] = depth.reshape(H, W, 1)

@@ -30,7 +30,7 @@ import numpy as np
 from learned_regularisation.patch_pose_generator import PatchPoseGenerator, FrustumChecker, FrustumRegulariser, LenticularRegulariser
 from learned_regularisation.patch_regulariser import load_patch_diffusion_model, \
     PatchRegulariser, LLFF_DEFAULT_PSEUDO_INTRINSICS
-from learned_regularisation.utils import Intrinsics
+from learned_regularisation.utils import Intrinsics, averaged_depth_and_normal
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -83,8 +83,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
 
         patch_diffusion_model = load_patch_diffusion_model(Path(opt.patch_regulariser_path))
         pose_generator = PatchPoseGenerator(cameras=scene.getTrainCameras(),
-                                            spatial_perturbation_magnitude=5,
-                                            angular_perturbation_magnitude_rads=0.2 * np.pi,
+                                            spatial_perturbation_magnitude=5e-2,
+                                            angular_perturbation_magnitude_rads=2e-3 * np.pi,
                                             no_perturb_prob=0.,
                                             frustum_checker=frustum_checker if opt.frustum_check_patches else None
                         )
@@ -104,7 +104,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                                                 background=background,
                                                 pipe=pipe)
 
-    viewpoint_stack = None
+    viewpoint_index_stack = None
     ema_loss_for_log = 0.0
     description_bar = tqdm(bar_format='[{desc}{postfix}]', desc="Stats")
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
@@ -134,10 +134,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
             gaussians.oneupSHdegree()
 
         # Pick a random Camera
-        if not viewpoint_stack:
-            viewpoint_stack = scene.getTrainCameras().copy()
-        viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
-
+        if not viewpoint_index_stack:
+            viewpoint_index_stack = [i for i in range(len(scene.getTrainCameras()))]
+        viewpoint_cam_index = viewpoint_index_stack.pop(randint(0, len(viewpoint_index_stack)-1))
+        viewpoint_cam = scene.getTrainCameras()[viewpoint_cam_index]
         # Render
         if (iteration - 1) == debug_from:
             pipe.debug = True
@@ -152,6 +152,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
         loss_lenticular = 0
         # Regularisation
         if opt.patch_regulariser_path:
+            # Save screen center depth to pose generator
+            pose_generator._screen_center_depths[viewpoint_cam_index] = averaged_depth_and_normal(render_pkg["render_depth"], intrinsics=intrinsics)
+
             # t schedule
             initial_diffusion_time = opt.initial_diffusion_time
             patch_reg_start_step = opt.patch_reg_start_step
@@ -222,7 +225,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                 description_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "Loss_fg": f"{loss_fg:.{4}f}", "Loss_diffusion": f"{loss_diffusion:.{4}f}", "Loss_photo":f"{loss_photo:.{4}f}", "Loss_lc":f"{loss_lenticular:.{4}f}", "Num_gs": gaussians._xyz.shape[0]})
                 progress_bar.update(10)
             if iteration == opt.iterations:
-                description.close()
+                description_bar.close()
                 progress_bar.close()
 
             # Log and save

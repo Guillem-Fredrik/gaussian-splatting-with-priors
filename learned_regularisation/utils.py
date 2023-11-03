@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torchvision
 
 from copy import copy
 from dataclasses import dataclass
@@ -183,3 +184,24 @@ def apply_intrinsics_to_camera(intrinsics, camera, old_intrinsics):
     new_camera.image_width = intrinsics.width
     new_camera.image_height = intrinsics.height
     return new_camera
+
+def averaged_depth_and_normal(depth_render, intrinsics, fov_radius = 0.01):
+    # return depth_render[intrinsics.width//2, intrinsics.height//2].detach().cpu().numpy()
+
+    fov_x = focal2fov(intrinsics.fx, intrinsics.width)
+    fov_y = focal2fov(intrinsics.fy, intrinsics.height)
+    std_x = intrinsics.width * fov_radius/fov_x
+    std_y = intrinsics.height * fov_radius/fov_y
+    std = int(0.5*(std_x + std_y))
+
+    with torch.no_grad():
+        depth_crop = depth_render[intrinsics.width//2-std-1:intrinsics.width//2+std+1, intrinsics.height//2-std-1:intrinsics.height//2+std+1]   
+        blur_filter = torchvision.transforms.GaussianBlur(kernel_size=(2*std+1, 2*std+1), sigma=std)
+        depth_blurred = blur_filter(depth_crop.unsqueeze(-1).permute(2,1,0)).permute(2,1,0).squeeze()
+        return depth_blurred[depth_blurred.shape[0]//2, depth_blurred.shape[1]//2].detach().cpu().numpy()
+
+    std = int(std)
+    with torch.no_grad():
+        depth = torch.mean(depth_render[intrinsics.width//2-std:intrinsics.width//2+std, intrinsics.height//2-std:intrinsics.height//2+std]).detach().cpu().numpy()
+
+    return depth

@@ -236,14 +236,29 @@ class PatchPoseGenerator:
         self._angular_mag = angular_perturbation_magnitude_rads
         self._no_perturb_prob = no_perturb_prob
         self._frustum_checker = frustum_checker
+        self._screen_center_depths = [0.0 for camera in cameras]
 
     def __len__(self):
         return len(self._cameras)
 
     def _perturb_camera(self, camera_to_perturb):
         while True:
-            new_camera = perturb_camera(camera=camera_to_perturb, spatial_mag=self._spatial_mag,
-                                    angular_mag=self._angular_mag)
+            new_camera = perturb_camera(camera=camera_to_perturb, spatial_mag=self._spatial_mag, angular_mag=self._angular_mag)
+            return new_camera
+            # TODO(guillem)
+            # _, camera_centre = unpack_4x4_transform(new_camera)
+            # for camera in self._cameras:
+            #     if self._frustum_checker is None or self._frustum_checker.is_in_frustum(camera_c2w=camera,
+            #                                                                             point_world=camera_centre):
+            #         return new_camera
+            #     else:
+            #         pass
+
+    def _perturb_camera_2(self, camera_to_perturb, depth):
+        depth = 0.5*depth
+        yaw_mag = camera_to_perturb.FoVx
+        while True:
+            new_camera = perturb_camera_2(camera=camera_to_perturb, depth=depth, yaw_mag=0.1*yaw_mag, spatial_mag=self._spatial_mag, angular_mag=self._angular_mag)
             return new_camera
             # TODO(guillem)
             # _, camera_centre = unpack_4x4_transform(new_camera)
@@ -259,7 +274,8 @@ class PatchPoseGenerator:
         # Generate a pose by perturbing the idx-th training view.
         camera = self._cameras[idx]
         if random.random() > self._no_perturb_prob:
-            new_camera = self._perturb_camera(camera)
+            # new_camera = self._perturb_camera(camera)
+            new_camera = self._perturb_camera_2(camera, self._screen_center_depths[idx])
         else:
             new_camera = camera
         return new_camera
@@ -279,6 +295,54 @@ def perturb_camera(camera, spatial_mag: float, angular_mag: float):
     rotation_perturbation = Rotation.random().as_rotvec() * (angular_mag / (2. * torch.pi))
     rotation_perturbation = Rotation.from_rotvec(rotation_perturbation).as_matrix()
     new_rotation = rotation_perturbation @ np.asarray(camera.R)
+
+    new_camera = Camera(camera.colmap_id, new_rotation, new_translation, camera.FoVx, camera.FoVy, camera.original_image, None,
+        camera.image_name, camera.uid,
+        trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda"
+        )
+
+    return new_camera
+
+def perturb_camera_2(camera, depth, yaw_mag: float, spatial_mag: float, angular_mag: float):
+    # We will cast a ray of length `depth` in the direction of the camera, and rotate the camera around that point
+    # Note that
+    # camera.center = self.world_view_transform.inverse()[3, :3]
+    #               = (0,0,0,1) @ self.world_view_transform.inverse()
+    #               = v such that v @ R + T = 0
+    #               = -T @ R.inv()
+    # So T = -camera.center @ R
+
+    old_camera_center = camera.camera_center.cpu().numpy()
+    camera_direction = np.array([0.0, 0.0, 1.0]) @ np.linalg.inv(camera.R)
+    mv = depth * camera_direction / np.linalg.norm(camera_direction)
+    camera_focus_point = old_camera_center + mv
+
+    yaw_perturbation = yaw_mag * (2.*np.random.random() - 1.)
+    cos_yaw = np.cos(yaw_perturbation)
+    sin_yaw = np.sin(yaw_perturbation)
+    # new_rotation = np.array([
+    #     [ cos_yaw, sin_yaw, 0.],
+    #     [-sin_yaw, cos_yaw, 0.],
+    #     [ 0.,      0.,      1.]
+    # ])
+    new_rotation = np.array([
+        [ cos_yaw, 0., sin_yaw],
+        [ 0.,      1., 0.],
+        [-sin_yaw, 0., cos_yaw]
+    ])
+    # Without spatial or angular perturbations, the following would be the camera center
+    new_camera_center = camera_focus_point + (old_camera_center - camera_focus_point) @ new_rotation
+
+    # Sample perturbation to orientation
+    rotation_perturbation = Rotation.random().as_rotvec() * (angular_mag / (2. * torch.pi))
+    rotation_perturbation = Rotation.from_rotvec(rotation_perturbation).as_matrix()
+    new_rotation = np.linalg.inv(new_rotation) @ rotation_perturbation @ np.asarray(camera.R)
+
+
+
+    # Sample perturbation to camera centre
+    cam_centre_perturbation = spatial_mag * (2. * torch.rand(3,) - 1.)
+    new_translation = - new_camera_center @ new_rotation + cam_centre_perturbation.numpy()
 
     new_camera = Camera(camera.colmap_id, new_rotation, new_translation, camera.FoVx, camera.FoVy, camera.original_image, None,
         camera.image_name, camera.uid,
