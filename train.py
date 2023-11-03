@@ -174,12 +174,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                 else:
                     raise RuntimeError('Internal error')
 
-                p_sample_patch = 0.25
+                p_sample_patch = 0.5 - 0.4*lambda_t
                 num_diffusion_patches = 8
 
                 cameras = scene.getTrainCameras()
-                patch_outputs = patch_regulariser.get_diffusion_loss(num_diffusion_patches, p_sample_patch=p_sample_patch, gaussians=gaussians,
-                    time=time, images=[camera.original_image for camera in cameras], image_intrinsics=[intrinsics for camera in cameras], image_cameras=cameras)
+                patch_outputs = patch_regulariser.get_diffusion_loss(num_diffusion_patches, p_sample_patch=p_sample_patch, gaussians=gaussians, time=time, images=[camera.original_image for camera in cameras], image_intrinsics=[intrinsics for camera in cameras], image_cameras=cameras, save_debug_visualisation=opt.debug_visualise_patches)
 
                 loss_diffusion = weight * patch_outputs.loss
 

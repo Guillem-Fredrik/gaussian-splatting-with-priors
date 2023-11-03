@@ -27,6 +27,8 @@ class DepthPreprocessor:
     """
     def __init__(self, min_depth: float):
         self.min_depth = min_depth
+        self.range_min = 0.
+        self.rang_max = 1.
 
     def __call__(self, depth):
         """
@@ -41,9 +43,13 @@ class DepthPreprocessor:
         # Linearly transform to range [0, 1], just like an rgb channel. The trainer will then transform to [-1, 1].
         inv_depth = inv_depth * self.min_depth
 
-        return inv_depth
+        self.range_min = inv_depth.min()
+        self.range_max = inv_depth.max()
+
+        return (inv_depth - self.range_min) / (self.range_max - self.range_min)
 
     def invert(self, inv_depth):
+        inv_depth = inv_depth * (self.range_max - self.range_min) + self.range_min
         inv_depth = inv_depth / self.min_depth
 
         depth = 1. / inv_depth
@@ -257,7 +263,7 @@ class PatchRegulariser:
     
 
     def get_diffusion_loss(self, num_diffusion_patches: int, p_sample_patch: float, gaussians: GaussianModel,
-        time, images, image_intrinsics, image_cameras):
+        time, images, image_intrinsics, image_cameras, save_debug_visualisation=False):
         if np.random.random() < p_sample_patch:
             index = np.random.choice(range(len(images)))
             camera = image_cameras[index]
@@ -295,8 +301,7 @@ class PatchRegulariser:
         patch_outputs = self.get_loss_for_patches(depth_patch=depth_patch, rgb_patch=rgb_patch, time=time,
                                        render_outputs={})
         
-        debug = False
-        if debug:
+        if save_debug_visualisation:
             M = image_depth_patch.max()
             m = image_depth_patch.min()
             debug_image = torch.cat([
@@ -417,6 +422,7 @@ class PatchRegulariser:
         step_scale_factor = 5e-4
         patch_outputs.images['disp_plus_step'] = patch_outputs.images['rendered_disp'] - \
             patch_outputs.images['pred_disp_noise'].unsqueeze(-1) * step_scale_factor / sigma_lambda
+        patch_outputs.images['depth_plus_step'] = self._depth_preprocessor.invert(patch_outputs.images['disp_plus_step'][...,-1])
 
         if self._diffusion_model.channels == 4:
             patch_outputs.images['pred_rgb_noise'] = pred_noise_bhwc[..., :-1]

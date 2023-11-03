@@ -103,6 +103,7 @@ class OptimizationParams(ParamGroup):
         self.patch_sample_downscale_factor = 4
         self.normalise_diffusion_losses = False
         self.frustum_check_patches = False
+        self.debug_visualise_patches = False
         # Frustum regularisation
         self.min_near = 0.05
         self.frustum_reg_initial_weight = 1.
