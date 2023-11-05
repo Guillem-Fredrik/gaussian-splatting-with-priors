@@ -97,13 +97,18 @@ class OptimizationParams(ParamGroup):
         self.patch_regulariser_path = ""
         self.initial_diffusion_time = 0.1
         self.patch_reg_start_step = 500
-        self.patch_reg_finish_step = 2500
+        self.patch_reg_finish_step = -1
         self.patch_weight_start = 1.
         self.patch_weight_finish = 1.
         self.patch_sample_downscale_factor = 4
         self.normalise_diffusion_losses = False
         self.frustum_check_patches = False
         self.debug_visualise_patches = False
+        self.diffusion_batch_size = 8
+        self.p_sample_patch_start = 0.25
+        self.p_sample_patch_finish = 0.25
+        self.perturbation_strength_start = 0.0
+        self.perturbation_strength_finish = 0.5
         # Frustum regularisation
         self.min_near = 0.05
         self.frustum_reg_initial_weight = 1.

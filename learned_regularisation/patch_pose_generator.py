@@ -237,6 +237,7 @@ class PatchPoseGenerator:
         self._no_perturb_prob = no_perturb_prob
         self._frustum_checker = frustum_checker
         self._screen_center_depths = [0.0 for camera in cameras]
+        self.perturbation_strength = 0.0
 
     def __len__(self):
         return len(self._cameras)
@@ -256,7 +257,7 @@ class PatchPoseGenerator:
 
     def _perturb_camera_2(self, camera_to_perturb, depth):
         depth = 0.5*depth
-        yaw_mag = 0.3*camera_to_perturb.FoVx
+        yaw_mag = self.perturbation_strength*camera_to_perturb.FoVx
         while True:
             new_camera = perturb_camera_2(camera=camera_to_perturb, depth=depth, yaw_mag=yaw_mag, spatial_mag=self._spatial_mag, angular_mag=self._angular_mag)
             return new_camera

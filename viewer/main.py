@@ -40,6 +40,7 @@ g_all_iterations = []
 g_chosen_iteration = None
 cameras = []
 current_keys = set()
+g_perturb_camera_step = 0
 
 def impl_glfw_init():
     window_name = "NeUVF editor"
@@ -137,7 +138,7 @@ def update_iteration(chosen_iteration):
 def main():
     global g_program, g_camera, g_scale_modifier, g_auto_sort, \
         g_show_control_win, g_show_help_win, \
-        g_render_mode, g_render_mode_tables, g_model_path, g_chosen_camera, cameras, g_all_iterations, g_chosen_iteration
+        g_render_mode, g_render_mode_tables, g_model_path, g_chosen_camera, cameras, g_all_iterations, g_chosen_iteration, g_perturb_camera_step
         
     imgui.create_context()
     if args.hidpi:
@@ -274,7 +275,7 @@ def main():
                 
                 # cameras
                 if len(cameras)>0:
-                    changed, g_chosen_camera = imgui.combo("camera", g_chosen_camera, [str(cam["id"]) for cam in cameras])
+                    changed, g_chosen_camera = imgui.combo("camera", g_chosen_camera, [str(cam["id"]) + (" (train)" if cam.get("train", False) else "") for cam in cameras])
                     if changed:
                         g_camera.set_camera_view(cameras[g_chosen_camera])
                 
@@ -291,11 +292,33 @@ def main():
                 # Perturb
                 if imgui.button(label="Perturb camera"):
                     g_camera.random_perturb()
+                    
+                # Perturb (2)
+                if g_perturb_camera_step == 1:
+                    g_perturb_camera_step = 2
+                elif g_perturb_camera_step == 2:
+                    width, height = glfw.get_framebuffer_size(window)
+                    nrChannels = 3
+                    stride = nrChannels * width
+                    stride += (4 - stride % 4) if stride % 4 else 0
+                    gl.glPixelStorei(gl.GL_PACK_ALIGNMENT, 4)
+                    gl.glReadBuffer(gl.GL_FRONT)
+                    bufferdata = gl.glReadPixels(0, 0, width, height, gl.GL_RGB, gl.GL_UNSIGNED_BYTE)
+                    img = np.frombuffer(bufferdata, np.uint8, -1).reshape(height, width, 3)
+                    g_camera.random_perturb_2(img)
+                    util.set_uniform_1int(g_program, g_render_mode - 3, "render_mod")
+                    g_perturb_camera_step = 0
+                
+                # TODO(guillem): finish adding new camera perturbation
+                # if imgui.button(label="Perturb camera (2)"):
+                #     g_camera.set_camera_view(cameras[g_chosen_camera])
+                #     util.set_uniform_1int(g_program, -10, "render_mod")
+                #     g_perturb_camera_step = 1
                 
                 if imgui.button(label='save image'):
                     width, height = glfw.get_framebuffer_size(window)
-                    nrChannels = 3;
-                    stride = nrChannels * width;
+                    nrChannels = 3
+                    stride = nrChannels * width
                     stride += (4 - stride % 4) if stride % 4 else 0
                     gl.glPixelStorei(gl.GL_PACK_ALIGNMENT, 4)
                     gl.glReadBuffer(gl.GL_FRONT)

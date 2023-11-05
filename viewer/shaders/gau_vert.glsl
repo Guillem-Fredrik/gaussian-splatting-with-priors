@@ -50,7 +50,7 @@ uniform vec3 hfovxy_focal;
 uniform vec3 cam_pos;
 uniform int sh_dim;
 uniform float scale_modifier;
-uniform int render_mod;  // > 0 render 0-ith SH dim, -1 depth, -2 bill board, -3 gaussian
+uniform int render_mod;  // > 0 render 0-ith SH dim, -1 depth, -2 bill board, -3 gaussian, -10 actual depth
 
 out vec3 color;
 out float alpha;
@@ -167,6 +167,13 @@ void main()
 		depth = depth * .07;
 		depth = depth < 1 ? 1 : depth;
 		depth = 1.0 - 1.0 / depth;
+		color = vec3(depth, depth, depth);
+		return;
+	}
+
+	if (render_mod == -10)
+	{
+		float depth = -g_pos_view.z / 256.0;
 		color = vec3(depth, depth, depth);
 		return;
 	}

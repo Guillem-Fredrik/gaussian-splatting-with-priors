@@ -28,8 +28,6 @@ class DepthPreprocessor:
     """
     def __init__(self, min_depth: float):
         self.min_depth = min_depth
-        self.range_min = 0.
-        self.rang_max = 1.
 
     def __call__(self, depth):
         """
@@ -44,12 +42,9 @@ class DepthPreprocessor:
         # Linearly transform to range [0, 1], just like an rgb channel. The trainer will then transform to [-1, 1].
         inv_depth = inv_depth * self.min_depth
 
-        self.range_max = inv_depth.max()
-
-        return inv_depth / self.range_max
+        return inv_depth
 
     def invert(self, inv_depth):
-        inv_depth = inv_depth * self.range_max
         inv_depth = inv_depth / self.min_depth
 
         depth = 1. / inv_depth
@@ -78,7 +73,7 @@ def make_random_patch_intrinsics(patch_size: int, full_image_intrinsics: Intrins
     :param downscale_factor: Number of original image pixels per patch pixel. If 1, no downscaling occurs
     :return: Intrinsics for patch as described above
     """
-    effective_downscale_factor = int(downscale_factor * full_image_intrinsics.width / 512)
+    effective_downscale_factor = int(downscale_factor * full_image_intrinsics.width / 1024)
     intrinsics_downscaled = Intrinsics(
         fx=full_image_intrinsics.fx // effective_downscale_factor,
         fy=full_image_intrinsics.fy // effective_downscale_factor,
@@ -303,21 +298,32 @@ class PatchRegulariser:
         if save_debug_visualisation:
             M = image_depth_patch.max()
             m = image_depth_patch.min()
-            debug_image = torch.cat([
-                torch.cat([
-                    patch_outputs.images["rendered_rgb"][0],
-                    patch_outputs.images["pred_rgb_x0"][0],
-                    patch_outputs.images["pred_rgb_noise"][0]
-                ], dim=1),
-                torch.cat([
-                    torch.repeat_interleave((patch_outputs.images["rendered_depth"][0] - m) / (M - m), repeats=3, dim=-1),
-                    torch.repeat_interleave(((patch_outputs.images["pred_depth_x0"][0].unsqueeze(-1) - m) / (M - m)).clamp(0,1), repeats=3, dim=-1),
-                    torch.repeat_interleave((0.5 + 0.25*patch_outputs.images["pred_disp_noise"][0].unsqueeze(-1)).clamp(0,1), repeats=3, dim=-1)
-                ], dim=1)
-            ], dim=0)
-            torchvision.utils.save_image(debug_image.permute((2,0,1)), f'output/diffusion_inputs_outputs.png')
-            # torchvision.utils.save_image(image_rgb_patch[0].permute((2,0,1)), f'output/prepatch-rgb.png')
-            # torchvision.utils.save_image((image_depth_patch[0]-m)/(M-m).permute((2,0,1)), f'output/prepatch-depth.png')
+            with torch.no_grad():
+                disps = [DISPARITY_CMAP(disp_img)[...,:-1] for disp_img in normalise_together([
+                    patch_outputs.images["rendered_disp"][0].cpu(),
+                    patch_outputs.images["pred_disp_x0"][0].cpu(),
+                    patch_outputs.images["disp_plus_step"][0].cpu()
+                ])]
+                debug_image = torch.cat([
+                    torch.cat([
+                        patch_outputs.images["rendered_rgb"][0],
+                        patch_outputs.images["pred_rgb_x0"][0],
+                        patch_outputs.images["pred_rgb_noise"][0]
+                    ], dim=1).cpu(),
+                    # torch.cat([
+                    #     torch.repeat_interleave((patch_outputs.images["rendered_depth"][0] - m) / (M - m), repeats=3, dim=-1),
+                    #     torch.repeat_interleave(((patch_outputs.images["pred_depth_x0"][0].unsqueeze(-1) - m) / (M - m)).clamp(0,1), repeats=3, dim=-1),
+                    #     torch.repeat_interleave((0.5 + 0.25*patch_outputs.images["pred_disp_noise"][0].unsqueeze(-1)).clamp(0,1), repeats=3, dim=-1)
+                    # ], dim=1).cpu(),
+                    torch.cat([
+                        torch.from_numpy(disps[0]).squeeze(),
+                        torch.from_numpy(disps[1]).squeeze(),
+                        torch.from_numpy(disps[2]).squeeze(),
+                    ], dim=1)
+                ], dim=0)
+                torchvision.utils.save_image(debug_image.permute((2,0,1)), f'output/diffusion_inputs_outputs.png')
+                # torchvision.utils.save_image(image_rgb_patch[0].permute((2,0,1)), f'output/prepatch-rgb.png')
+                # torchvision.utils.save_image((image_depth_patch[0]-m)/(M-m).permute((2,0,1)), f'output/prepatch-depth.png')
 
         return patch_outputs
 

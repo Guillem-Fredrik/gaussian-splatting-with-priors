@@ -57,12 +57,17 @@ class Scene:
                 dest_file.write(src_file.read())
             json_cams = []
             camlist = []
+            id = 0
             if scene_info.test_cameras:
                 camlist.extend(scene_info.test_cameras)
+                for cam in scene_info.test_cameras:
+                    json_cams.append(camera_to_JSON(id, cam, train=False))
+                    id += 1
             if scene_info.train_cameras:
                 camlist.extend(scene_info.train_cameras)
-            for id, cam in enumerate(camlist):
-                json_cams.append(camera_to_JSON(id, cam))
+                for cam in scene_info.train_cameras:
+                    json_cams.append(camera_to_JSON(id, cam, train=True))
+                    id += 1
             with open(os.path.join(self.model_path, "cameras.json"), 'w') as file:
                 json.dump(json_cams, file)
 
@@ -87,7 +92,7 @@ class Scene:
             if args.random_initialisation:
                 from utils.sh_utils import SH2RGB
                 from scene.gaussian_model import BasicPointCloud
-                num_pts = 10000
+                num_pts = 1000
                 xyz = (np.random.random((num_pts, 3)) - 0.5 )*100
                 shs = np.random.random((num_pts, 3)) / 255.0
                 pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))

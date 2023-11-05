@@ -59,7 +59,7 @@ def cameraList_from_camInfos(cam_infos, resolution_scale, args):
 
     return camera_list
 
-def camera_to_JSON(id, camera : Camera):
+def camera_to_JSON(id, camera : Camera, train: bool):
     Rt = np.zeros((4, 4))
     Rt[:3, :3] = camera.R.transpose()
     Rt[:3, 3] = camera.T
@@ -77,6 +77,7 @@ def camera_to_JSON(id, camera : Camera):
         'position': pos.tolist(),
         'rotation': serializable_array_2d,
         'fy' : fov2focal(camera.FovY, camera.height),
-        'fx' : fov2focal(camera.FovX, camera.width)
+        'fx' : fov2focal(camera.FovX, camera.width),
+        'train' : train
     }
     return camera_entry

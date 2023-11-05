@@ -12,7 +12,8 @@ import sys
 
 parent_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.append(parent_dir)
-from learned_regularisation.patch_pose_generator import perturb_camera 
+from learned_regularisation.patch_pose_generator import perturb_camera, perturb_camera_2
+from learned_regularisation.utils import Intrinsics, averaged_depth_and_normal
 from scene.cameras import Camera as SceneCamera
 
 def rotation_matrix(axis, theta):
@@ -177,6 +178,31 @@ class Camera:
         camera = perturb_camera(camera,spatial_mag=0.2,angular_mag=0.2 * np.pi)
         
         up,right,front = camera.R.T
+        self.up = up
+        self.target = self.position+front
+        self.position = camera.T
+    
+    def random_perturb_2(self, img):
+        up, right, front = self.get_dir_vecs()
+        focaly = fov2focal(self.fovy, img.shape[1])
+        focalx = focaly / img.shape[1] * img.shape[0]
+        fovx = focal2fov(focalx, img.shape[0])
+        camera = SceneCamera(0, np.array([right,up,front]).T, self.position, fovx, self.fovy, torch.zeros(img.shape), None,
+            "", 0, trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cpu"
+        )
+        depth = averaged_depth_and_normal(depth_render=torch.tensor(img[...,0]), intrinsics=Intrinsics(
+            focalx,
+            focaly,
+            img.shape[0] / 2,
+            img.shape[1] / 2,
+            img.shape[0],
+            img.shape[1]
+        ))
+        # depth = 10*img[img.shape[0]//2, img.shape[1]//2, 0]
+        camera = perturb_camera_2(camera, depth=0.5*depth, yaw_mag=0.3*fovx, spatial_mag=0.00002, angular_mag=0.00002 * np.pi)
+        print(camera.camera_center)
+        
+        right,up,front = camera.R.T
         self.up = up
         self.target = self.position+front
         self.position = camera.T

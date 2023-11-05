@@ -85,7 +85,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
         pose_generator = PatchPoseGenerator(cameras=scene.getTrainCameras(),
                                             spatial_perturbation_magnitude=5e-2,
                                             angular_perturbation_magnitude_rads=2e-3 * np.pi,
-                                            no_perturb_prob=0.,
+                                            no_perturb_prob=0., #DEBUG(guillem)
                                             frustum_checker=frustum_checker if opt.frustum_check_patches else None
                         )
         
@@ -158,7 +158,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
             # t schedule
             initial_diffusion_time = opt.initial_diffusion_time
             patch_reg_start_step = opt.patch_reg_start_step
-            patch_reg_finish_step = opt.patch_reg_finish_step
+            patch_reg_finish_step = opt.patch_reg_finish_step if opt.patch_reg_finish_step > 0 else opt.iterations
             weight_start = opt.patch_weight_start
             weight_finish = opt.patch_weight_finish
 
@@ -174,8 +174,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                 else:
                     raise RuntimeError('Internal error')
 
-                p_sample_patch = 0.4 - 0.35*lambda_t
-                num_diffusion_patches = 8
+                p_sample_patch = opt.p_sample_patch_start + (opt.p_sample_patch_finish - opt.p_sample_patch_start) * lambda_t
+                pose_generator.perturbation_strength = opt.perturbation_strength_start + (opt.perturbation_strength_finish - opt.perturbation_strength_start) * lambda_t
+                num_diffusion_patches = opt.diffusion_batch_size
 
                 cameras = scene.getTrainCameras()
                 patch_outputs = patch_regulariser.get_diffusion_loss(num_diffusion_patches, p_sample_patch=p_sample_patch, gaussians=gaussians, time=time, images=[camera.original_image for camera in cameras], image_intrinsics=[intrinsics for camera in cameras], image_cameras=cameras, save_debug_visualisation=opt.debug_visualise_patches)
@@ -203,11 +204,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                 # Lenticular reg        
                 if patch_regulariser.lenticular_regulariser is not None:
                     lenticular_reg_weight = opt.lenticular_reg_initial_weight + (opt.lenticular_reg_final_weight - opt.lenticular_reg_initial_weight) * lambda_t
-                    sampled_indices = np.arange(gaussians.get_xyz.shape[0])
-                    patch_lenticular_loss = lenticular_reg_weight * patch_regulariser.lenticular_regulariser(
-                        xyzs=gaussians.get_xyz[sampled_indices].reshape(-1, 3), scales=gaussians.get_scaling[sampled_indices].reshape(-1, 3), weights=gaussians.get_opacity[sampled_indices].reshape(-1), covariances=gaussians.get_covariance()[sampled_indices].reshape(-1, 6),
-                    )
-                    loss_lenticular = patch_lenticular_loss
+                    if lenticular_reg_weight > 0:
+                        sampled_indices = np.arange(gaussians.get_xyz.shape[0])
+                        patch_lenticular_loss = lenticular_reg_weight * patch_regulariser.lenticular_regulariser(
+                            xyzs=gaussians.get_xyz[sampled_indices].reshape(-1, 3), scales=gaussians.get_scaling[sampled_indices].reshape(-1, 3), weights=gaussians.get_opacity[sampled_indices].reshape(-1), covariances=gaussians.get_covariance()[sampled_indices].reshape(-1, 6),
+                        )
+                        loss_lenticular = patch_lenticular_loss
 
         # fg regularisation
         loss_fg = render_pkg["render_opacity"].mean() * opt.fg_reg_weight
