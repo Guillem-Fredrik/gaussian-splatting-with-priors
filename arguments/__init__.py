@@ -96,6 +96,7 @@ class OptimizationParams(ParamGroup):
         # Patch regularisation
         self.patch_regulariser_path = ""
         self.initial_diffusion_time = 0.1
+        self.final_diffusion_time = 0.0
         self.patch_reg_start_step = 500
         self.patch_reg_finish_step = -1
         self.patch_weight_start = 1.

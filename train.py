@@ -157,6 +157,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
 
             # t schedule
             initial_diffusion_time = opt.initial_diffusion_time
+            final_diffusion_time = opt.final_diffusion_time
             patch_reg_start_step = opt.patch_reg_start_step
             patch_reg_finish_step = opt.patch_reg_finish_step if opt.patch_reg_finish_step > 0 else opt.iterations
             weight_start = opt.patch_weight_start
@@ -170,7 +171,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                 if iteration > patch_reg_finish_step:
                     time = 0.
                 elif iteration > patch_reg_start_step:
-                    time = initial_diffusion_time * (1. - lambda_t)
+                    time = final_diffusion_time + (initial_diffusion_time - final_diffusion_time) * (1. - lambda_t)
                 else:
                     raise RuntimeError('Internal error')
 

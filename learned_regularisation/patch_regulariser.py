@@ -301,8 +301,9 @@ class PatchRegulariser:
             with torch.no_grad():
                 disps = [DISPARITY_CMAP(disp_img)[...,:-1] for disp_img in normalise_together([
                     patch_outputs.images["rendered_disp"][0].cpu(),
-                    patch_outputs.images["pred_disp_x0"][0].cpu(),
-                    patch_outputs.images["disp_plus_step"][0].cpu()
+                    patch_outputs.images["pred_disp_x0"][0].cpu()
+                ])] + [DISPARITY_CMAP(disp_img)[...,:-1] for disp_img in normalise_noise([
+                    -1.0+2.0*patch_outputs.images["pred_disp_noise"][0].cpu()
                 ])]
                 debug_image = torch.cat([
                     torch.cat([
@@ -527,6 +528,10 @@ class PatchRegulariser:
 def normalise_together(imgs):
     max_val = max(img.max() for img in imgs)
     return [img/max_val for img in imgs]
+
+def normalise_noise(imgs):
+    max_val = max(torch.abs(img).max() for img in imgs)
+    return [0.5 + 0.5*img/max_val for img in imgs]
 
 
 @torch.cuda.amp.autocast(enabled=False)
