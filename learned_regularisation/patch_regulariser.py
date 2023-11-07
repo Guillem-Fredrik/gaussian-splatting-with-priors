@@ -267,6 +267,7 @@ class PatchRegulariser:
             image_intrinsic = image_intrinsics[index]
 
             image_depth_patch, image_rgb_patch, _, _ = self._render_patches_with_intrinsics(intrinsics=[image_intrinsic], cameras=[camera], gaussians=gaussians)
+            image_depth_patch = 10.0 * image_depth_patch / image_depth_patch.detach().mean()
 
             rgb_patch = torch.zeros((num_diffusion_patches, self._patch_size, self._patch_size, 3), device="cuda")
             depth_patch = torch.zeros((num_diffusion_patches, self._patch_size, self._patch_size, 1), device="cuda")
@@ -282,6 +283,7 @@ class PatchRegulariser:
             image_intrinsic = image_intrinsics[0]
 
             image_depth_patch, image_rgb_patch, _, _ = self._render_patches_with_intrinsics(intrinsics=[image_intrinsic], cameras=[camera], gaussians=gaussians)
+            image_depth_patch = 10.0 * image_depth_patch / image_depth_patch.detach().mean()
 
             rgb_patch = torch.zeros((num_diffusion_patches, self._patch_size, self._patch_size, 3), device="cuda")
             depth_patch = torch.zeros((num_diffusion_patches, self._patch_size, self._patch_size, 1), device="cuda")
