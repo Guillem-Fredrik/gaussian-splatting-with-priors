@@ -159,63 +159,62 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
             initial_diffusion_time = opt.initial_diffusion_time
             final_diffusion_time = opt.final_diffusion_time
             patch_reg_start_step = opt.patch_reg_start_step
-            patch_reg_finish_step = opt.patch_reg_finish_step if opt.patch_reg_finish_step > 0 else opt.iterations
-            weight_start = opt.patch_weight_start
-            weight_finish = opt.patch_weight_finish
+            patch_reg_finish_step = opt.patch_reg_finish_step
+            patch_weight_start = opt.patch_weight_start
+            patch_weight_finish = opt.patch_weight_finish
 
-            lambda_t = (iteration - patch_reg_start_step) / (patch_reg_finish_step - patch_reg_start_step)
-            lambda_t = np.clip(lambda_t, 0., 1.)
-            weight = weight_start + (weight_finish - weight_start) * lambda_t
+            for patch_start, patch_finish, weight_start, weight_finish in zip(patch_reg_start_step, 
+                                                                              patch_reg_finish_step, 
+                                                                              patch_weight_start, 
+                                                                              patch_weight_finish):
 
-            if iteration > patch_reg_start_step:
-                if iteration > patch_reg_finish_step:
-                    time = 0.
-                elif iteration > patch_reg_start_step:
+                if patch_start < iteration < patch_finish:
+                    lambda_t = (iteration - patch_start) / (patch_finish - patch_start)
+                    lambda_t = np.clip(lambda_t, 0., 1.)
+                    weight = weight_start + (weight_finish - weight_start) * lambda_t
                     time = final_diffusion_time + (initial_diffusion_time - final_diffusion_time) * (1. - lambda_t)
-                else:
-                    raise RuntimeError('Internal error')
 
-                p_sample_patch = opt.p_sample_patch_start + (opt.p_sample_patch_finish - opt.p_sample_patch_start) * lambda_t
-                pose_generator.perturbation_strength = opt.perturbation_strength_start + (opt.perturbation_strength_finish - opt.perturbation_strength_start) * lambda_t
-                num_diffusion_patches = opt.diffusion_batch_size
+                    p_sample_patch = opt.p_sample_patch_start + (opt.p_sample_patch_finish - opt.p_sample_patch_start) * lambda_t
+                    pose_generator.perturbation_strength = opt.perturbation_strength_start + (opt.perturbation_strength_finish - opt.perturbation_strength_start) * lambda_t
+                    num_diffusion_patches = opt.diffusion_batch_size
 
-                cameras = scene.getTrainCameras()
-                patch_outputs = patch_regulariser.get_diffusion_loss(num_diffusion_patches, p_sample_patch=p_sample_patch, gaussians=gaussians, time=time, images=[camera.original_image for camera in cameras], image_intrinsics=[intrinsics for camera in cameras], image_cameras=cameras, save_debug_visualisation=opt.debug_visualise_patches)
+                    cameras = scene.getTrainCameras()
+                    patch_outputs = patch_regulariser.get_diffusion_loss(num_diffusion_patches, p_sample_patch=p_sample_patch, gaussians=gaussians, time=time, images=[camera.original_image for camera in cameras], image_intrinsics=[intrinsics for camera in cameras], image_cameras=cameras, save_debug_visualisation=opt.debug_visualise_patches)
 
-                loss_diffusion = weight * patch_outputs.loss
+                    loss_diffusion = weight * patch_outputs.loss
 
-                # # Geometric reg
-                # if opt.apply_geom_reg_to_patches:
-                #     loss += spread_loss_weight * patch_outputs.render_outputs['loss_dist']
+                    # # Geometric reg
+                    # if opt.apply_geom_reg_to_patches:
+                    #     loss += spread_loss_weight * patch_outputs.render_outputs['loss_dist']
 
-                # Frustum reg        
-                if patch_regulariser.frustum_regulariser is not None:
-                    frustum_reg_weight = opt.frustum_reg_initial_weight + (opt.frustum_reg_final_weight - opt.frustum_reg_initial_weight) * lambda_t
+                    # Frustum reg        
+                    if patch_regulariser.frustum_regulariser is not None:
+                        frustum_reg_weight = opt.frustum_reg_initial_weight + (opt.frustum_reg_final_weight - opt.frustum_reg_initial_weight) * lambda_t
 
-                    xyzs_flat = patch_outputs.render_outputs['xyzs'].reshape(-1, 3)
-                    weights_flat = patch_outputs.render_outputs['weights'].reshape(-1)
+                        xyzs_flat = patch_outputs.render_outputs['xyzs'].reshape(-1, 3)
+                        weights_flat = patch_outputs.render_outputs['weights'].reshape(-1)
 
-                    patch_frustum_reg_weight = frustum_reg_weight
-                    patch_frustum_loss = patch_frustum_reg_weight * patch_regulariser.frustum_regulariser(
-                        xyzs=xyzs_flat, weights=weights_flat, frustum_count_thresh=1,
-                    )
-                    print('Patch frustum loss', patch_frustum_loss)
-                    loss += patch_frustum_loss
-
-                # Lenticular reg        
-                if patch_regulariser.lenticular_regulariser is not None:
-                    lenticular_reg_weight = opt.lenticular_reg_initial_weight + (opt.lenticular_reg_final_weight - opt.lenticular_reg_initial_weight) * lambda_t
-                    if lenticular_reg_weight > 0:
-                        sampled_indices = np.arange(gaussians.get_xyz.shape[0])
-                        patch_lenticular_loss = lenticular_reg_weight * patch_regulariser.lenticular_regulariser(
-                            xyzs=gaussians.get_xyz[sampled_indices].reshape(-1, 3), scales=gaussians.get_scaling[sampled_indices].reshape(-1, 3), weights=gaussians.get_opacity[sampled_indices].reshape(-1), covariances=gaussians.get_covariance()[sampled_indices].reshape(-1, 6),
+                        patch_frustum_reg_weight = frustum_reg_weight
+                        patch_frustum_loss = patch_frustum_reg_weight * patch_regulariser.frustum_regulariser(
+                            xyzs=xyzs_flat, weights=weights_flat, frustum_count_thresh=1,
                         )
-                        loss_lenticular = patch_lenticular_loss
+                        print('Patch frustum loss', patch_frustum_loss)
+                        loss += patch_frustum_loss
+
+                    # Lenticular reg        
+                    if patch_regulariser.lenticular_regulariser is not None:
+                        lenticular_reg_weight = opt.lenticular_reg_initial_weight + (opt.lenticular_reg_final_weight - opt.lenticular_reg_initial_weight) * lambda_t
+                        if lenticular_reg_weight > 0:
+                            sampled_indices = np.arange(gaussians.get_xyz.shape[0])
+                            patch_lenticular_loss = lenticular_reg_weight * patch_regulariser.lenticular_regulariser(
+                                xyzs=gaussians.get_xyz[sampled_indices].reshape(-1, 3), scales=gaussians.get_scaling[sampled_indices].reshape(-1, 3), weights=gaussians.get_opacity[sampled_indices].reshape(-1), covariances=gaussians.get_covariance()[sampled_indices].reshape(-1, 6),
+                            )
+                            loss_lenticular = patch_lenticular_loss
 
         # fg regularisation
         loss_fg = render_pkg["render_opacity"].mean() * opt.fg_reg_weight
 
-        loss = loss_photo+loss_diffusion+loss_fg+loss_lenticular
+        loss = loss_photo + loss_diffusion + loss_fg + loss_lenticular
         loss.backward()
 
         iter_end.record()
@@ -238,18 +237,32 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
             if save_every is not None and iteration%save_every == 0:
                 scene.save("current")
 
-            # Densification
-            if iteration < opt.densify_until_iter and gaussians._xyz.shape[0] < opt.max_gaussians:
-                # Keep track of max radii in image-space for pruning
-                gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+            for start, end in zip(opt.densify_from_iter, opt.densify_until_iter):
+                if start < iteration < end and gaussians._xyz.shape[0] < opt.max_gaussians:
+                    # Keep track of max radii in image-space for pruning
+                    gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+                    gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
-                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
+                    if iteration > start and iteration % opt.densification_interval == 0:
+                        size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                        gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
+                    
+                    if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == start):
+                        gaussians.reset_opacity()
+
+            # # Densification removed to work over list above
+            # if iteration < opt.densify_until_iter and gaussians._xyz.shape[0] < opt.max_gaussians:
+            #     # Keep track of max radii in image-space for pruning
+            #     gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+            #     gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+
+            #     if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+            #         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+            #         gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
                 
-                if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
-                    gaussians.reset_opacity()
+            #     if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+            #         gaussians.reset_opacity()
+
 
             # Optimizer step
             if iteration < opt.iterations:
