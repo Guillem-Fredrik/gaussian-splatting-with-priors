@@ -236,6 +236,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                 scene.save(iteration)
             if save_every is not None and iteration%save_every == 0:
                 scene.save("current")
+                torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt_current.pth")
+                scene.save(iteration)
+                torch.save((gaussians.capture(), iteration), scene.model_path + f"/chkpnt_{iteration}.pth")
 
             for start, end in zip(opt.densify_from_iter, opt.densify_until_iter):
                 if start < iteration < end and gaussians._xyz.shape[0] < opt.max_gaussians:
