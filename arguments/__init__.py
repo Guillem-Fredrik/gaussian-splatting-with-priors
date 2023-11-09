@@ -29,11 +29,17 @@ class ParamGroup:
             if shorthand:
                 if t == bool:
                     group.add_argument("--" + key, ("-" + key[0:1]), default=value, action="store_true")
+                elif t == list:
+                    group.add_argument("--" + key, ("-" + key[0:1]), default=value, 
+                                        type=lambda x: [float(y) for y in x.split(',')])
                 else:
                     group.add_argument("--" + key, ("-" + key[0:1]), default=value, type=t)
             else:
                 if t == bool:
                     group.add_argument("--" + key, default=value, action="store_true")
+                elif t == list:
+                    group.add_argument("--" + key, default=value, 
+                                        type=lambda x: [float(y) for y in x.split(',')])
                 else:
                     group.add_argument("--" + key, default=value, type=t)
 
@@ -87,8 +93,10 @@ class OptimizationParams(ParamGroup):
         self.lambda_dssim = 0.2
         self.densification_interval = 100
         self.opacity_reset_interval = 3000
-        self.densify_from_iter = 500
-        self.densify_until_iter = 15_000
+        self.densify_from_iter = [500, 2000, 3000]
+        self.densify_until_iter = [1000, 2500, 3500]
+        # self.densify_from_iter2 = 16_000
+        # self.densify_until_iter2 = 20_000
         self.densify_grad_threshold = 0.0002
         self.max_gaussians = 1000000
         # Regularisation
@@ -97,10 +105,10 @@ class OptimizationParams(ParamGroup):
         self.patch_regulariser_path = ""
         self.initial_diffusion_time = 0.1
         self.final_diffusion_time = 0.0
-        self.patch_reg_start_step = 500
-        self.patch_reg_finish_step = -1
-        self.patch_weight_start = 1.
-        self.patch_weight_finish = 1.
+        self.patch_reg_start_step = [500]
+        self.patch_reg_finish_step = [-1]
+        self.patch_weight_start = [1.]
+        self.patch_weight_finish = [1.]
         self.patch_sample_downscale_factor = 4
         self.normalise_diffusion_losses = False
         self.frustum_check_patches = False
