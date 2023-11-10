@@ -74,14 +74,15 @@ class FrustumRegulariser:
             frustum_counts += self.is_in_frustum(tf, xyzs)
         return frustum_counts
 
-    def __call__(self, xyzs: torch.Tensor, weights: torch.Tensor, frustum_count_thresh: int = 1,
+    def __call__(self, xyzs: torch.Tensor, weights: torch.Tensor, frustum_count_thresh: int = 2,
                  debug_vis_name: Optional[str] = None) -> torch.Tensor:
         """
         Compute the frustum regularisation loss for some points.
         Will compute a loss proportional to the total amount of alpha-compositing weight which
         is visible from fewer than frustum_count_thresh frustums.
 
-        :param xyzs: Points lying on rays which are being used in rendering.
+        :param xyzs: Gaussian centers.
+        :param xyzs: Gaussian covariances in world space.
         :param weights: The weights used for each of those points in alpha-compositing.
         :param frustum_count_thresh:
         :param debug_vis_name: Optional name for writing debug point clouds.
@@ -89,7 +90,7 @@ class FrustumRegulariser:
         """
         with torch.no_grad():
             frustum_counts = self.count_frustums(xyzs)
-        print('Frustum count range', frustum_counts.min(), frustum_counts.max())
+        # print('Frustum count range', frustum_counts.min(), frustum_counts.max())
 
         penalty_size = frustum_count_thresh - frustum_counts
         penalty_size = torch.clip(penalty_size, min=0.)
@@ -237,6 +238,7 @@ class PatchPoseGenerator:
         self._no_perturb_prob = no_perturb_prob
         self._frustum_checker = frustum_checker
         self._screen_center_depths = [0.0 for camera in cameras]
+        self._screen_center_depths_last_computed = [0 for camera in cameras]
         self.perturbation_strength = 0.0
 
     def __len__(self):

@@ -95,8 +95,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                                                 full_image_intrinsics=intrinsics,
                                                 device=device,
                                                 planar_depths=True,
-                                                frustum_regulariser=None,
-                                                # frustum_regulariser=frustum_regulariser if opt.frustum_regularise_patches else None,
+                                                # frustum_regulariser=None,
+                                                frustum_regulariser=frustum_regulariser if opt.frustum_regularise_patches else None,
                                                 # lenticular_regulariser=None,
                                                 lenticular_regulariser=lenticular_regulariser,
                                                 sample_downscale_factor=opt.patch_sample_downscale_factor,
@@ -150,9 +150,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
         loss_photo = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
         loss_diffusion = 0
         loss_lenticular = 0
+        loss_frustum = 0
         # Regularisation
         if opt.patch_regulariser_path:
             # Save screen center depth to pose generator
+            if pose_generator._screen_center_depths_last_computed[viewpoint_cam_index] < opt.recompute_depth_iterations:
+                pose_generator._screen_center_depths_last_computed[viewpoint_cam_index] += 1 / len(pose_generator._screen_center_depths)
+            else:
+                pose_generator._screen_center_depths_last_computed[viewpoint_cam_index] = 0
             pose_generator._screen_center_depths[viewpoint_cam_index] = averaged_depth_and_normal(render_pkg["render_depth"], intrinsics=intrinsics)
 
             # t schedule
@@ -191,15 +196,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                     if patch_regulariser.frustum_regulariser is not None:
                         frustum_reg_weight = opt.frustum_reg_initial_weight + (opt.frustum_reg_final_weight - opt.frustum_reg_initial_weight) * lambda_t
 
-                        xyzs_flat = patch_outputs.render_outputs['xyzs'].reshape(-1, 3)
-                        weights_flat = patch_outputs.render_outputs['weights'].reshape(-1)
+                        xyzs_flat = gaussians.get_xyz.reshape(-1, 3)
+                        weights_flat = gaussians.get_opacity.reshape(-1)
 
                         patch_frustum_reg_weight = frustum_reg_weight
                         patch_frustum_loss = patch_frustum_reg_weight * patch_regulariser.frustum_regulariser(
-                            xyzs=xyzs_flat, weights=weights_flat, frustum_count_thresh=1,
+                            xyzs=xyzs_flat, weights=weights_flat, frustum_count_thresh=2,
                         )
-                        print('Patch frustum loss', patch_frustum_loss)
-                        loss += patch_frustum_loss
+                        loss_frustum = patch_frustum_loss
 
                     # Lenticular reg        
                     if patch_regulariser.lenticular_regulariser is not None:
@@ -214,7 +218,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
         # fg regularisation
         loss_fg = render_pkg["render_opacity"].mean() * opt.fg_reg_weight
 
-        loss = loss_photo + loss_diffusion + loss_fg + loss_lenticular
+        loss = loss_photo + loss_diffusion + loss_fg + loss_lenticular + loss_frustum
         loss.backward()
 
         iter_end.record()
@@ -223,7 +227,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
-                description_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "Loss_fg": f"{loss_fg:.{4}f}", "Loss_diffusion": f"{loss_diffusion:.{4}f}", "Loss_photo":f"{loss_photo:.{4}f}", "Loss_lc":f"{loss_lenticular:.{4}f}", "Num_gs": gaussians._xyz.shape[0]})
+                description_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "Loss_fg": f"{loss_fg:.{4}f}", "Loss_diffusion": f"{loss_diffusion:.{4}f}", "Loss_photo":f"{loss_photo:.{4}f}", "Loss_lc":f"{loss_lenticular:.{4}f}", "Loss_frustum":f"{loss_frustum:.{4}f}", "Num_gs": gaussians._xyz.shape[0]})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 description_bar.close()

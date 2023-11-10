@@ -116,9 +116,11 @@ class OptimizationParams(ParamGroup):
         self.diffusion_batch_size = 8
         self.p_sample_patch_start = 0.25
         self.p_sample_patch_finish = 0.25
+        self.recompute_depth_iterations = 100
         self.perturbation_strength_start = 0.0
         self.perturbation_strength_finish = 0.5
         # Frustum regularisation
+        self.frustum_regularise_patches = False
         self.min_near = 0.05
         self.frustum_reg_initial_weight = 1.
         self.frustum_reg_final_weight = 1e-2
