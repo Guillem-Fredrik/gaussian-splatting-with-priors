@@ -109,6 +109,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
     description_bar = tqdm(bar_format='[{desc}{postfix}]', desc="Stats")
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+    skip_next_reconstruction = False
     for iteration in range(first_iter, opt.iterations + 1):        
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -141,13 +142,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
         # Render
         if (iteration - 1) == debug_from:
             pipe.debug = True
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background)
-        image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+        skipped_reconstruction = skip_next_reconstruction
+        if not skipped_reconstruction:
+            render_pkg = render(viewpoint_cam, gaussians, pipe, background)
+            image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
-        # Loss
-        gt_image = viewpoint_cam.original_image.cuda()
-        Ll1 = l1_loss(image, gt_image)
-        loss_photo = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+            # Loss
+            gt_image = viewpoint_cam.original_image.cuda()
+            Ll1 = l1_loss(image, gt_image)
+            loss_photo = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        else:
+            loss_photo = 0.0
         loss_diffusion = 0
         loss_lenticular = 0
         loss_frustum = 0
@@ -156,9 +161,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
             # Save screen center depth to pose generator
             if pose_generator._screen_center_depths_last_computed[viewpoint_cam_index] < opt.recompute_depth_iterations:
                 pose_generator._screen_center_depths_last_computed[viewpoint_cam_index] += 1 / len(pose_generator._screen_center_depths)
+                with torch.no_grad():
+                    pose_generator._screen_center_depths[viewpoint_cam_index] = averaged_depth_and_normal(render_pkg["render_depth"], intrinsics=intrinsics)
             else:
                 pose_generator._screen_center_depths_last_computed[viewpoint_cam_index] = 0
-            pose_generator._screen_center_depths[viewpoint_cam_index] = averaged_depth_and_normal(render_pkg["render_depth"], intrinsics=intrinsics)
 
             # t schedule
             initial_diffusion_time = opt.initial_diffusion_time
@@ -172,8 +178,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                                                                               patch_reg_finish_step, 
                                                                               patch_weight_start, 
                                                                               patch_weight_finish):
-
                 if patch_start < iteration < patch_finish:
+                    if opt.skip_reconstructions > 1 and iteration % opt.skip_reconstructions == opt.skip_reconstructions - 1:
+                        skip_next_reconstruction = True
+                    else:
+                        skip_next_reconstruction = False
                     lambda_t = (iteration - patch_start) / (patch_finish - patch_start)
                     lambda_t = np.clip(lambda_t, 0., 1.)
                     weight = weight_start + (weight_finish - weight_start) * lambda_t
@@ -216,8 +225,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                             loss_lenticular = patch_lenticular_loss
 
         # fg regularisation
-        loss_fg = render_pkg["render_opacity"].mean() * opt.fg_reg_weight
-
+        if not skipped_reconstruction and opt.fg_reg_weight > 0.0:
+            loss_fg = render_pkg["render_opacity"].mean() * opt.fg_reg_weight
+        else:
+            loss_fg = 0.0
         loss = loss_photo + loss_diffusion + loss_fg + loss_lenticular + loss_frustum
         loss.backward()
 
@@ -245,7 +256,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                 torch.save((gaussians.capture(), iteration), scene.model_path + f"/chkpnt_{iteration}.pth")
 
             for start, end in zip(opt.densify_from_iter, opt.densify_until_iter):
-                if start < iteration < end and gaussians._xyz.shape[0] < opt.max_gaussians:
+                if start < iteration < end and gaussians._xyz.shape[0] < opt.max_gaussians and not skipped_reconstruction:
                     # Keep track of max radii in image-space for pruning
                     gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                     gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)

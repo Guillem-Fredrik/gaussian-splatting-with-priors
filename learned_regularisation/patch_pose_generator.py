@@ -258,7 +258,7 @@ class PatchPoseGenerator:
             #         pass
 
     def _perturb_camera_2(self, camera_to_perturb, depth):
-        depth = 0.5*depth
+        # depth = 0.5*depth
         yaw_mag = self.perturbation_strength*camera_to_perturb.FoVx
         while True:
             new_camera = perturb_camera_2(camera=camera_to_perturb, depth=depth, yaw_mag=yaw_mag, spatial_mag=self._spatial_mag, angular_mag=self._angular_mag)

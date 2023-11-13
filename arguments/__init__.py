@@ -102,6 +102,7 @@ class OptimizationParams(ParamGroup):
         # Regularisation
         self.fg_reg_weight = 0.02
         # Patch regularisation
+        self.skip_reconstructions = -1
         self.patch_regulariser_path = ""
         self.initial_diffusion_time = 0.1
         self.final_diffusion_time = 0.0
