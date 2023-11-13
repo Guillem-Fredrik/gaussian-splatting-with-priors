@@ -26,6 +26,8 @@ def readImages(renders_dir, gt_dir):
     gts = []
     image_names = []
     for fname in os.listdir(renders_dir):
+        if fname.endswith("_depth.png") or fname.endswith("_opacity.png"):
+            continue
         render = Image.open(renders_dir / fname)
         gt = Image.open(gt_dir / fname)
         renders.append(tf.to_tensor(render).unsqueeze(0)[:, :3, :, :].cuda())
@@ -89,7 +91,7 @@ def evaluate(model_paths):
                 json.dump(full_dict[scene_dir], fp, indent=True)
             with open(scene_dir + "/per_view.json", 'w') as fp:
                 json.dump(per_view_dict[scene_dir], fp, indent=True)
-        except:
+        except Exception as e:
             print("Unable to compute metrics for model", scene_dir)
 
 if __name__ == "__main__":
