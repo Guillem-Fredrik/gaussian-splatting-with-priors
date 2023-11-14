@@ -146,11 +146,11 @@ def readColmapSceneInfo(path, images, eval, num_train_images=3, llffhold=8):
     cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
-    with open(os.path.join(path, "train_images.json"),"r") as f:    
-        train_image_names = set(json.load(f))
+    with open(os.path.join(path, "split.json"),"r") as f:    
+        split = json.load(f)
     
-    train_cam_infos = [c for idx, c in enumerate(cam_infos) if c.image_name in train_image_names]
-    test_cam_infos = [c for idx, c in enumerate(cam_infos) if c.image_name not in train_image_names]
+    train_cam_infos = [c for idx, c in enumerate(cam_infos) if c.image_name in split["train"]]
+    test_cam_infos = [c for idx, c in enumerate(cam_infos) if c.image_name in split["test"]]
     
     # Evenly subsample to the desired number of training samples
     # if num_train_images < len(train_cam_infos) - 1:
