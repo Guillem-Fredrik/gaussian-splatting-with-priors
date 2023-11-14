@@ -34,6 +34,7 @@ class CameraInfo(NamedTuple):
     image_name: str
     width: int
     height: int
+    image_id: int
 
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
@@ -99,7 +100,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         image = Image.open(image_path)
 
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                              image_path=image_path, image_name=image_name, width=width, height=height)
+                              image_path=image_path, image_name=image_name, width=width, height=height, image_id=extr.id)
         cam_infos.append(cam_info)
     sys.stdout.write('\n')
     return cam_infos
@@ -145,30 +146,31 @@ def readColmapSceneInfo(path, images, eval, num_train_images=3, llffhold=8):
     cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
-    if eval:
-        train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
-        test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
-    else:
-        train_cam_infos = cam_infos
-        test_cam_infos = []
-
+    with open(os.path.join(path, "train_images.json"),"r") as f:    
+        train_image_names = set(json.load(f))
+    
+    train_cam_infos = [c for idx, c in enumerate(cam_infos) if c.image_name in train_image_names]
+    test_cam_infos = [c for idx, c in enumerate(cam_infos) if c.image_name not in train_image_names]
+    
     # Evenly subsample to the desired number of training samples
-    if num_train_images < len(train_cam_infos) - 1:
-        idx_sub = np.linspace(0, len(train_cam_infos) - 1, num_train_images)
-    else:
-        idx_sub = range(len(train_cam_infos))
-    train_cam_infos = [train_cam_infos[round(i)] for i in idx_sub]
+    # if num_train_images < len(train_cam_infos) - 1:
+    #     idx_sub = np.linspace(0, len(train_cam_infos) - 1, num_train_images)
+    # else:
+    #     idx_sub = range(len(train_cam_infos))
+    # train_cam_infos = [train_cam_infos[round(i)] for i in idx_sub]
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 
-    ply_path = os.path.join(path, "sparse/0/points3D.ply")
+    train_cam_ids = [c.image_id for c in train_cam_infos]
+
+    ply_path = os.path.join(path, f"sparse/0/points3D_{'_'.join(str(x) for x in train_cam_ids)}.ply")
     bin_path = os.path.join(path, "sparse/0/points3D.bin")
     txt_path = os.path.join(path, "sparse/0/points3D.txt")
     if not os.path.exists(ply_path):
         print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
         try:
-            xyz, rgb, _ = read_points3D_binary(bin_path)
-        except:
+            xyz, rgb, _ = read_points3D_binary(bin_path, train_cam_ids)
+        except FileNotFoundError:
             xyz, rgb, _ = read_points3D_text(txt_path)
         storePly(ply_path, xyz, rgb)
     try:
