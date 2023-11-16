@@ -110,7 +110,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
     skip_next_reconstruction = False
-    for iteration in range(first_iter, opt.iterations + 1):        
+    iteration = first_iter
+    iteration_all = first_iter
+    while iteration <= opt.iterations:
+        skipped_reconstruction = skip_next_reconstruction
+        
         if network_gui.conn == None:
             network_gui.try_connect()
         while network_gui.conn != None:
@@ -127,12 +131,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                 network_gui.conn = None
 
         iter_start.record()
+        
+        if not skipped_reconstruction:
+            gaussians.update_learning_rate(iteration)
 
-        gaussians.update_learning_rate(iteration)
-
-        # Every 1000 its we increase the levels of SH up to a maximum degree
-        if iteration % 1000 == 0:
-            gaussians.oneupSHdegree()
+            # Every 1000 its we increase the levels of SH up to a maximum degree
+            if iteration % 1000 == 0:
+                gaussians.oneupSHdegree()
 
         # Pick a random Camera
         if not viewpoint_index_stack:
@@ -142,7 +147,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
         # Render
         if (iteration - 1) == debug_from:
             pipe.debug = True
-        skipped_reconstruction = skip_next_reconstruction
         if not skipped_reconstruction:
             render_pkg = render(viewpoint_cam, gaussians, pipe, background)
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
@@ -158,13 +162,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
         loss_frustum = 0
         # Regularisation
         if opt.patch_regulariser_path:
-            # Save screen center depth to pose generator
-            if pose_generator._screen_center_depths_last_computed[viewpoint_cam_index] < opt.recompute_depth_iterations:
-                pose_generator._screen_center_depths_last_computed[viewpoint_cam_index] += 1 / len(pose_generator._screen_center_depths)
-                with torch.no_grad():
-                    pose_generator._screen_center_depths[viewpoint_cam_index] = averaged_depth_and_normal(render_pkg["render_depth"], intrinsics=intrinsics)
-            else:
-                pose_generator._screen_center_depths_last_computed[viewpoint_cam_index] = 0
+            if not skipped_reconstruction:
+                # Save screen center depth to pose generator
+                if pose_generator._screen_center_depths_last_computed[viewpoint_cam_index] < opt.recompute_depth_iterations:
+                    pose_generator._screen_center_depths_last_computed[viewpoint_cam_index] += 1 / len(pose_generator._screen_center_depths)
+                    with torch.no_grad():
+                        pose_generator._screen_center_depths[viewpoint_cam_index] = averaged_depth_and_normal(render_pkg["render_depth"], intrinsics=intrinsics)
+                else:
+                    pose_generator._screen_center_depths_last_computed[viewpoint_cam_index] = 0
 
             # t schedule
             initial_diffusion_time = opt.initial_diffusion_time
@@ -179,7 +184,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
                                                                               patch_weight_start, 
                                                                               patch_weight_finish):
                 if patch_start < iteration < patch_finish:
-                    if opt.skip_reconstructions > 1 and iteration % opt.skip_reconstructions == opt.skip_reconstructions - 1:
+                    if opt.skip_reconstructions > 1 and iteration_all % opt.skip_reconstructions != opt.skip_reconstructions - 1:
                         skip_next_reconstruction = True
                     else:
                         skip_next_reconstruction = False
@@ -234,62 +239,68 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations,save_ever
 
         iter_end.record()
 
-        with torch.no_grad():
-            # Progress bar
-            ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
-            if iteration % 10 == 0:
-                description_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "Loss_fg": f"{loss_fg:.{4}f}", "Loss_diffusion": f"{loss_diffusion:.{4}f}", "Loss_photo":f"{loss_photo:.{4}f}", "Loss_lc":f"{loss_lenticular:.{4}f}", "Loss_frustum":f"{loss_frustum:.{4}f}", "Num_gs": gaussians._xyz.shape[0]})
-                progress_bar.update(10)
-            if iteration == opt.iterations:
-                description_bar.close()
-                progress_bar.close()
+        if not skipped_reconstruction:
 
-            # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
-            if (iteration in saving_iterations):
-                print("\n[ITER {}] Saving Gaussians".format(iteration))
-                scene.save(iteration)
-            if save_every is not None and iteration%save_every == 0:
-                scene.save("current")
-                torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt_current.pth")
-                scene.save(iteration)
-                torch.save((gaussians.capture(), iteration), scene.model_path + f"/chkpnt_{iteration}.pth")
+            with torch.no_grad():
+                # Progress bar
+                ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
+                if iteration % 10 == 0:
+                    description_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "Loss_fg": f"{loss_fg:.{4}f}", "Loss_diffusion": f"{loss_diffusion:.{4}f}", "Loss_photo":f"{loss_photo:.{4}f}", "Loss_lc":f"{loss_lenticular:.{4}f}", "Loss_frustum":f"{loss_frustum:.{4}f}", "Num_gs": gaussians._xyz.shape[0]})
+                    progress_bar.update(10)
+                if iteration == opt.iterations:
+                    description_bar.close()
+                    progress_bar.close()
 
-            for start, end in zip(opt.densify_from_iter, opt.densify_until_iter):
-                if start < iteration < end and gaussians._xyz.shape[0] < opt.max_gaussians and not skipped_reconstruction:
-                    # Keep track of max radii in image-space for pruning
-                    gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                    gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+                # Log and save
+                training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
+                if (iteration in saving_iterations):
+                    print("\n[ITER {}] Saving Gaussians".format(iteration))
+                    scene.save(iteration)
+                if save_every is not None and iteration%save_every == 0:
+                    scene.save("current")
+                    torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt_current.pth")
+                    scene.save(iteration)
+                    torch.save((gaussians.capture(), iteration), scene.model_path + f"/chkpnt_{iteration}.pth")
 
-                    if iteration > start and iteration % opt.densification_interval == 0:
-                        size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                        gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
+                for start, end in zip(opt.densify_from_iter, opt.densify_until_iter):
+                    if start < iteration < end and gaussians._xyz.shape[0] < opt.max_gaussians and not skipped_reconstruction:
+                        # Keep track of max radii in image-space for pruning
+                        gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+                        gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+
+                        if iteration > start and iteration % opt.densification_interval == 0:
+                            size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                            gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
+                        
+                        if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == start):
+                            gaussians.reset_opacity()
+
+                # # Densification removed to work over list above
+                # if iteration < opt.densify_until_iter and gaussians._xyz.shape[0] < opt.max_gaussians:
+                #     # Keep track of max radii in image-space for pruning
+                #     gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+                #     gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+
+                #     if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                #         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                #         gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
                     
-                    if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == start):
-                        gaussians.reset_opacity()
-
-            # # Densification removed to work over list above
-            # if iteration < opt.densify_until_iter and gaussians._xyz.shape[0] < opt.max_gaussians:
-            #     # Keep track of max radii in image-space for pruning
-            #     gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-            #     gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
-
-            #     if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-            #         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-            #         gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
-                
-            #     if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
-            #         gaussians.reset_opacity()
+                #     if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+                #         gaussians.reset_opacity()
 
 
-            # Optimizer step
-            if iteration < opt.iterations:
-                gaussians.optimizer.step()
-                gaussians.optimizer.zero_grad(set_to_none = True)
+                # Optimizer step
+                if iteration < opt.iterations:
+                    gaussians.optimizer.step()
+                    gaussians.optimizer.zero_grad(set_to_none = True)
 
-            if (iteration in checkpoint_iterations):
-                print("\n[ITER {}] Saving Checkpoint".format(iteration))
-                torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+                if (iteration in checkpoint_iterations):
+                    print("\n[ITER {}] Saving Checkpoint".format(iteration))
+                    torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+
+        if not skipped_reconstruction:
+            iteration += 1
+        iteration_all += 1
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
