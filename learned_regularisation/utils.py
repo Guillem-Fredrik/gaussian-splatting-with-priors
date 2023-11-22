@@ -196,6 +196,7 @@ def averaged_depth_and_normal(depth_render, intrinsics, fov_radius = 0.1):
 
     with torch.no_grad():
         depth_crop = depth_render[intrinsics.width//2-2*std-1:intrinsics.width//2+2*std+1, intrinsics.height//2-2*std-1:intrinsics.height//2+2*std+1]
+        return depth_crop.mean().detach().cpu().numpy()
         blur_filter = torchvision.transforms.GaussianBlur(kernel_size=(4*std+1, 4*std+1), sigma=std)
         depth_blurred = blur_filter(depth_crop.unsqueeze(-1).permute(2,1,0)).permute(2,1,0).squeeze()
         return depth_blurred[depth_blurred.shape[0]//2, depth_blurred.shape[1]//2].detach().cpu().numpy()
