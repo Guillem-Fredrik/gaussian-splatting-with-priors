@@ -54,7 +54,7 @@ class FrustumRegulariser:
         print('Initialised FrustumRegulariser with min_near', self.min_near)
 
     def is_in_frustum(self, transform_w2c, points_world) -> float:
-        rotation, translation = unpack_4x4_transform(transform_w2c)
+        rotation, translation = unpack_4x4_transform(transform_w2c.T)
         points_cam = points_world @ rotation.T + translation
         x = points_cam[..., 0]
         y = points_cam[..., 1]
